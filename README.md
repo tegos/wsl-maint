@@ -1,7 +1,7 @@
 # wsl-maint
 
 [![CI](https://github.com/tegos/wsl-maint/actions/workflows/test.yml/badge.svg)](https://github.com/tegos/wsl-maint/actions/workflows/test.yml)
-[![License](https://img.shields.io/github/license/tegos/wsl-maint)](LICENSE)
+[![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
 **Clean WSL2 caches, back the distro up, and give the freed space back to Windows.**
 
