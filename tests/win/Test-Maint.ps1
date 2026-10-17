@@ -389,6 +389,18 @@ function Test-NoCleanIsRefusedOutsideBackupAndFull {
     Assert-Contains $r.Log '-NoClean' 'the logged reason names the switch'
 }
 
+# Same rule as -NoClean: `full -Verify` reads as "only check" and would run
+# the whole backup + compact if the switch were ignored.
+function Test-VerifyIsRefusedOutsideDefender {
+    foreach ($verb in @('clean', 'full')) {
+        $r = Invoke-MaintSandbox -Arguments @($verb, '-Verify')
+        Assert-Eq 1 $r.ExitCode "$verb -Verify exits non-zero"
+        Assert-NotContains $r.Marker 'wsl ' "$verb -Verify: nothing reached WSL"
+        Assert-NotContains $r.Marker 'backup ' "$verb -Verify: the backup never started"
+        Assert-Contains $r.Log '-Verify' "$verb -Verify: the logged reason names the switch"
+    }
+}
+
 # --- End-of-run pause in the UAC-relaunched child ----------------------------
 # maint.bat passes the internal -PauseAtEnd only on the UAC relaunch, and only
 # without -Unattended: that child runs in a new window that would otherwise
@@ -460,6 +472,7 @@ Test-DefenderVerifyIsForwarded
 Test-DefenderRefusesDryRun
 Test-NoCleanIsForwardedByBackupAndFull
 Test-NoCleanIsRefusedOutsideBackupAndFull
+Test-VerifyIsRefusedOutsideDefender
 Test-ConfigOverrideVariableWinsOverRepoFile
 Test-ConfigOverrideReachesTheWslSideForEveryProxyVerb
 Test-BrokenConfigStopsBeforeAnyAction

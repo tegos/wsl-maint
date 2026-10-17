@@ -216,7 +216,9 @@ Verbs that need admin: `backup`, `compact`, `full`, and `defender` without `-Ver
 `-Unattended` is accepted by every verb and only skips the final `pause`, except on
 `full` and `backup`, where it also answers the large-deletion gate. It does not avoid the
 UAC prompt. `defender` refuses `-DryRun`: it has no dry run, and ignoring the switch
-would add the exclusions for real.
+would add the exclusions for real. The reverse holds too: every other verb refuses
+`-Verify` (`full -Verify` would otherwise back up and compact), and every verb but
+`backup` and `full` refuses `-NoClean`.
 
 ### Config on both halves
 
