@@ -84,6 +84,8 @@ try {
     if ($Command -ne 'help') { $cfg = Get-MaintConfig }
     # Refused rather than ignored: `clean -NoClean` would otherwise clean.
     if ($NoClean -and $Command -notin 'backup', 'full') { throw '-NoClean applies to backup and full only' }
+    # Same for -Verify: `full -Verify` would otherwise back up and compact.
+    if ($Verify -and $Command -ne 'defender') { throw '-Verify applies to defender only' }
     switch ($Command) {
         'help'     { Show-Usage }
         'audit'    { Invoke-Wsl (Get-MaintWslArgs $cfg 'audit') }
