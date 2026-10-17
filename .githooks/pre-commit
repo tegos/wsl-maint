@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Blocks a commit when the bash half of the suite fails. The PowerShell half
+# is skipped: it is the slow one, and a plain `bash tests/run.sh` still runs it.
+# Enable once per clone: git config core.hooksPath .githooks
+# Bypass for one commit: git commit --no-verify
+# It tests the working tree, not the index, so unstaged edits count too.
+set -uo pipefail
+top=$(git rev-parse --show-toplevel) || exit 1
+if ! out=$(WSL_MAINT_SKIP_WIN=1 bash "$top/tests/run.sh" 2>&1); then
+  printf '%s\n' "$out" | grep -E 'FAIL|^== |^passed:' >&2
+  echo "pre-commit: bash suite failed, commit blocked (--no-verify to skip)" >&2
+  exit 1
+fi
+printf '%s\n' "$out" | tail -n 1

@@ -1,0 +1,12 @@
+logs/
+*.log
+*.log.[0-9]
+*.log.*.gz
+.state
+.idea/
+maint.conf
+.claude/
+.superpowers/
+
+# Owner's local working notes, never published (see .gitattributes).
+.scratch/

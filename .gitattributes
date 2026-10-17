@@ -1,0 +1,22 @@
+# Line endings are pinned per file type, so a default Git for Windows clone
+# (core.autocrlf=true) checks out the same bytes as a WSL or Linux one.
+# tests/test_eol.sh checks the result.
+* text=auto
+
+# Run by bash inside WSL: a CRLF line is a syntax error there.
+*.sh            text eol=lf
+wsl/maint       text eol=lf
+.githooks/*     text eol=lf
+# Parsed by the bash half (it strips a CR, but LF keeps both halves on one
+# byte stream).
+*.conf          text eol=lf
+*.example       text eol=lf
+# Windows PowerShell 5.1 reads LF fine; pinning it keeps the bytes the suite
+# runs against the same on every clone.
+*.ps1           text eol=lf
+# cmd.exe misparses labels and goto targets in an LF-only batch file.
+*.bat           text eol=crlf
+
+# The owner's working notes (specs, tickets, audit ledgers) stay out of
+# `git archive`, i.e. out of the published tree.
+.scratch/       export-ignore

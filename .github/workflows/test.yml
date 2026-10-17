@@ -1,0 +1,32 @@
+name: test
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  bash:
+    # The PowerShell half runs in the windows job below; skipping it here is
+    # explicit, because tests/run.sh fails under CI when it did not run.
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: bash suite
+        run: WSL_MAINT_SKIP_WIN=1 bash tests/run.sh
+
+  windows:
+    # Windows PowerShell 5.1 (powershell.exe, not pwsh), the shell maint.bat
+    # uses. The runner has no WSL; the suite never calls the real wsl.exe.
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      # No core.autocrlf override: the runner's default is what a Git for
+      # Windows user gets, and .gitattributes pins the endings that matter.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: powershell suite
+        shell: cmd
+        run: powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File tests\win\Run.ps1

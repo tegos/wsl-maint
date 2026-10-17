@@ -1,0 +1,178 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SELF_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+REPO_ROOT="$(cd "$SELF_DIR/.." && pwd)"
+export REPO_ROOT
+
+. "$SELF_DIR/lib/common.sh"
+. "$SELF_DIR/lib/config.sh"
+. "$SELF_DIR/lib/rules.sh"
+. "$SELF_DIR/lib/browsers.sh"
+. "$SELF_DIR/lib/state.sh"
+. "$SELF_DIR/lib/audit.sh"
+. "$SELF_DIR/lib/clean.sh"
+. "$SELF_DIR/lib/docker.sh"
+. "$SELF_DIR/lib/space.sh"
+
+RULES_FILE="$REPO_ROOT/rules.conf"
+INCLUDE_MANUAL=0
+# Set only by --yes / --dry-run. An inherited ASSUME_YES or DRY_RUN is a generic
+# name another tool may have exported; it must not answer yes for the user or
+# turn a real run into a silent dry one. The libraries read these names.
+ASSUME_YES=0
+DRY_RUN=0
+# Set from --named-volumes only, never inherited: a stray export must not opt
+# in to pruning named volumes.
+NAMED_VOLUMES=0
+IF_STALE=""
+CONFIG_FILE=""
+
+usage() {
+  cat <<'EOF'
+wsl-maint - WSL side
+
+usage: maint <command> [flags]
+
+commands:
+  audit                 per-path usage, what each rule would free, delta since last audit
+  space                 what fills the vhdx files: top dirs, docker volumes/images
+  clean                 apply rules marked auto=yes
+  docker                prune build cache; anonymous dangling volumes too, after a y
+                        or --yes (named ones only with --named-volumes);
+                        falls back to docker.exe, exits 1 if no daemon answers
+  verify                zstd -t the newest backup archive
+  help                  this text
+
+flags:
+  --dry-run             print what would happen, change nothing
+  --sessions            also apply auto=no rules (state-holding caches, opt-in)
+  --if-stale <days>     clean/docker only: exit immediately unless the last run is
+                        older than <days> (a trailing "d" is allowed: 7 and 7d are
+                        the same); other commands record no last run and ignore it
+  --rules <file>        use an alternate rules file (default: repo rules.conf)
+  --config <file>       use an alternate config file (default: repo maint.conf, or
+                        $WSL_MAINT_CONFIG when set); see maint.conf.example
+  --yes                 docker only: remove dangling volumes without asking (without it
+                        they are removed only after a y at a terminal; guarded names
+                        are never removed)
+  --named-volumes       docker only: named dangling volumes are candidates too, not
+                        just anonymous (64-hex) ones; the name guard still applies.
+                        Same as docker_named_volumes = yes in maint.conf
+
+Heavy operations that terminate the VM (backup, compact) live on the Windows
+side: run maint.bat from the repo root.
+EOF
+}
+
+CMD="${1:-help}"
+[ $# -gt 0 ] && shift || true
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --dry-run)  DRY_RUN=1; shift ;;
+    --sessions) INCLUDE_MANUAL=1; shift ;;
+    --yes)      ASSUME_YES=1; shift ;;
+    --named-volumes) NAMED_VOLUMES=1; shift ;;
+    --if-stale)
+      IF_STALE="${2:?--if-stale needs a number of days}"
+      # A trailing "d" is accepted because that is how every duration in
+      # rules.conf is written (`age 30d`) and how the design doc spells this
+      # flag (`--if-stale 7d`); rejecting it made the documented invocation
+      # exit 2.
+      IF_STALE="${IF_STALE%d}"
+      case "$IF_STALE" in
+        ''|*[!0-9]*) log_err "--if-stale needs a number of days, got: $2"; exit 2 ;;
+      esac
+      # Base 10 explicitly: `$(( ))` in state.sh would read `08` as a bad
+      # octal literal and `010` as 8 days.
+      IF_STALE=$((10#$IF_STALE))
+      shift 2
+      ;;
+    --rules)    RULES_FILE="${2:?--rules needs a path}"; shift 2 ;;
+    --config)   CONFIG_FILE="${2:?--config needs a path}"; shift 2 ;;
+    -h|--help)  usage; exit 0 ;;
+    *)          log_err "unknown flag: $1"; usage; exit 2 ;;
+  esac
+done
+export DRY_RUN ASSUME_YES NAMED_VOLUMES
+
+# Loaded before anything else runs (including --if-stale), so a broken line
+# stops the command before it does any work. help needs no config.
+case "$CMD" in
+  help|-h|--help) ;;
+  *)
+    if [ -n "$CONFIG_FILE" ]; then
+      config_load "$CONFIG_FILE" 1 || exit 2
+    elif [ -n "${WSL_MAINT_CONFIG:-}" ]; then
+      config_load "$WSL_MAINT_CONFIG" 1 || exit 2
+    else
+      config_load "$REPO_ROOT/maint.conf" 0 || exit 2
+    fi
+    ;;
+esac
+
+if [ -n "$IF_STALE" ]; then
+  if ! state_is_stale "$CMD" "$IF_STALE"; then
+    echo "not stale: $CMD ran within the last ${IF_STALE}d, skipping"
+    exit 0
+  fi
+fi
+
+case "$CMD" in
+  audit)
+    audit_run "$RULES_FILE"
+    ;;
+  space)
+    space_run
+    ;;
+  clean)
+    clean_run "$RULES_FILE" "$INCLUDE_MANUAL"
+    [ "$DRY_RUN" = "1" ] || state_mark_run clean
+    ;;
+  docker)
+    docker_prune
+    [ "$DRY_RUN" = "1" ] || state_mark_run docker
+    ;;
+  verify)
+    if [ -z "$CFG_BACKUP_ROOT" ]; then
+      log_err "backup_root is not set: set backup_root in ${CFG_CONFIG_FILE} (see maint.conf.example)"
+      exit 1
+    fi
+    if ! backup_dir=$(config_wsl_path "$CFG_BACKUP_ROOT"); then
+      log_err "backup_root must be a local drive path (X:\\...), got: $CFG_BACKUP_ROOT"
+      exit 1
+    fi
+    # Same prefix the Windows side names and rotates archives by: the
+    # lowercased distro plus "_" (Ubuntu -> ubuntu_*.tar.zst).
+    prefix="${CFG_DISTRO,,}_"
+    # Only names Windows retention counts (Invoke-BackupRetention, which
+    # matches case-insensitively too): <prefix>yyyy-MM-dd_HHmm.tar.zst. The
+    # loose <prefix>*.tar.zst would also take another distro's archive
+    # (ubuntu_22_...) or a hand-made copy. Newest by mtime, as retention sorts.
+    newest=""
+    stamp='^[0-9]{4}-[0-9]{2}-[0-9]{2}_[0-9]{4}\.tar\.zst$'
+    shopt -s nullglob nocaseglob
+    for f in "$backup_dir/$prefix"*.tar.zst; do
+      name="${f##*/}"
+      [ -f "$f" ] && [[ "${name:${#prefix}}" =~ $stamp ]] || continue
+      if [ -z "$newest" ] || [ "$f" -nt "$newest" ]; then newest="$f"; fi
+    done
+    shopt -u nullglob nocaseglob
+    if [ -z "$newest" ]; then
+      log_err "no ${prefix}<yyyy-MM-dd_HHmm>.tar.zst backup found in $backup_dir"
+      exit 1
+    fi
+    command -v zstd >/dev/null 2>&1 || { log_err "zstd not installed: sudo apt install zstd"; exit 1; }
+    echo "verifying $newest ($(human "$(dir_bytes "$newest")"))"
+    zstd -t "$newest"
+    ;;
+  help|-h|--help)
+    usage
+    ;;
+  *)
+    log_err "unknown command: $CMD"
+    usage
+    exit 2
+    ;;
+esac

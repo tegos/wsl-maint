@@ -1,0 +1,23 @@
+# wsl-maint config. Copy to maint.conf (same directory, gitignored) and edit.
+# Read by both halves (maint.bat / maint.ps1 and wsl/maint), parsed as data,
+# never executed. Format: key = value, one per line; lines starting with # are
+# comments; values are taken literally; an empty value means the default.
+# An unknown key or a line without = stops every command with file:line.
+
+# WSL distro to export, compact and call; backup archives are named <distro>_* (lowercased). Default: Ubuntu
+distro = Ubuntu
+
+# Windows directory for backup archives (X:\...); backup, full and verify refuse while it is unset. Default: none
+backup_root =
+
+# Backup archives to keep; older <distro>_* archives in backup_root are deleted. Default: 3
+keep = 3
+
+# Extra Docker volume name patterns never pruned, |-separated, case-insensitive regex, added to the built-in db-data|db_data|mysql|_data|redis|postgres|pgdata|mongo|mariadb. Applies when docker_named_volumes = yes (or --named-volumes). Default: empty
+docker_guard_extra =
+
+# yes = `maint docker` also prunes NAMED dangling volumes (same as --named-volumes), still through the guard above; no = only anonymous (64-hex) ones. Default: no
+docker_named_volumes = no
+
+# Extra directories scanned for installed Playwright packages, :-separated WSL paths, added to the built-in $HOME roots. Each must exist: a missing one blocks the Playwright prune. Default: empty
+pw_scan_roots_extra =
