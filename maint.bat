@@ -61,8 +61,8 @@ rem would treat any negative exit code as success.
 if not "%MAINT_RC%"=="0" echo.
 if not "%MAINT_RC%"=="0" echo [FAILED] exit %MAINT_RC% - see logs\ for details
 rem A failed run pauses here even after a child pause: a child that dies in
-rem param() binding (an ambiguous switch such as -D) or before its try exits
-rem without pausing, and its window takes the error with it.
+rem param() binding (a switch given a non-boolean value, -DryRun:abc) or before
+rem its try exits without pausing, and its window takes the error with it.
 if not defined MAINT_UNATTENDED if not defined MAINT_CHILD_PAUSES pause
 if not defined MAINT_UNATTENDED if defined MAINT_CHILD_PAUSES if not "%MAINT_RC%"=="0" pause
 endlocal & exit /b %MAINT_RC%

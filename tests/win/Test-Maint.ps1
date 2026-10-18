@@ -401,6 +401,55 @@ function Test-VerifyIsRefusedOutsideDefender {
     }
 }
 
+# help acts on nothing, so the applicability refusals have nothing to guard:
+# `help -NoClean` used to exit 1. A stray argument is still refused.
+function Test-HelpIgnoresApplicabilitySwitches {
+    foreach ($switch in @('-NoClean', '-Verify', '-DryRun', '-Unattended')) {
+        $r = Invoke-MaintSandbox -Arguments @('help', $switch)
+        Assert-Eq 0 $r.ExitCode "help $switch exits 0"
+        Assert-Contains $r.Stdout 'wsl-maint - Windows side' "help $switch prints usage"
+        Assert-Eq '' $r.Marker.Trim() "help $switch performs no action"
+    }
+    $f = Invoke-MaintSandbox -Arguments @('help', '-Foo')
+    Assert-Eq 1 $f.ExitCode 'help -Foo exits 1'
+    Assert-Contains $f.Log '[err] unknown argument: -Foo' 'help -Foo names the stray argument in the log'
+}
+
+# The one-letter abbreviations of maint.ps1's own switches. They must keep
+# working once the common parameters are gone.
+function Test-OneLetterSwitchesAreUnambiguous {
+    $r = Invoke-MaintSandbox -Arguments @('backup', '-D')
+    Assert-Eq 0 $r.ExitCode 'backup -D exits 0'
+    Assert-Contains $r.Marker 'backup dry=True' '-D means -DryRun'
+    $v = Invoke-MaintSandbox -Arguments @('defender', '-V')
+    Assert-Eq 0 $v.ExitCode 'defender -V exits 0'
+    Assert-Contains $v.Marker 'defender verify=True' '-V means -Verify'
+    $n = Invoke-MaintSandbox -Arguments @('backup', '-N', '-U')
+    Assert-Contains $n.Marker 'backup dry=False unattended=True noclean=True' '-N and -U keep their meaning'
+}
+
+# An advanced script gets the common parameters: -E, -O, -W and -I were each
+# ambiguous between two of them and died in param() binding, before the try
+# and its log; -Debug and -Verbose were accepted and ignored. All of them are
+# now stray arguments, refused with the reason in the log.
+function Test-CommonParametersAreRefusedAndLogged {
+    foreach ($switch in @('-E', '-O', '-W', '-I', '-Debug', '-Verbose')) {
+        $r = Invoke-MaintSandbox -Arguments @('audit', $switch)
+        Assert-Eq 1 $r.ExitCode "audit $switch exits 1"
+        Assert-Contains $r.Log "[err] unknown argument: $switch" "$switch is named in the log"
+        Assert-NotContains $r.Marker 'wsl' "audit $switch does not run"
+    }
+}
+
+# Guards the fix above: a new switch sharing a first letter with another
+# would make that one-letter abbreviation ambiguous again.
+function Test-SwitchesStartWithDistinctLetters {
+    $ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot '..\..\maint.ps1'), [ref]$null, [ref]$null)
+    $names = @($ast.ParamBlock.Parameters | ForEach-Object { $_.Name.VariablePath.UserPath })
+    $letters = @($names | ForEach-Object { $_.Substring(0, 1).ToUpperInvariant() } | Sort-Object -Unique)
+    Assert-Eq $names.Count $letters.Count ('maint.ps1 parameters start with distinct letters: ' + ($names -join ', '))
+}
+
 # --- End-of-run pause in the UAC-relaunched child ----------------------------
 # maint.bat passes the internal -PauseAtEnd only on the UAC relaunch, and only
 # without -Unattended: that child runs in a new window that would otherwise
@@ -473,6 +522,10 @@ Test-DefenderRefusesDryRun
 Test-NoCleanIsForwardedByBackupAndFull
 Test-NoCleanIsRefusedOutsideBackupAndFull
 Test-VerifyIsRefusedOutsideDefender
+Test-HelpIgnoresApplicabilitySwitches
+Test-OneLetterSwitchesAreUnambiguous
+Test-CommonParametersAreRefusedAndLogged
+Test-SwitchesStartWithDistinctLetters
 Test-ConfigOverrideVariableWinsOverRepoFile
 Test-ConfigOverrideReachesTheWslSideForEveryProxyVerb
 Test-BrokenConfigStopsBeforeAnyAction
