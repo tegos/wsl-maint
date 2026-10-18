@@ -125,7 +125,7 @@ function Invoke-MaintSandbox {
         # Confirm-LargeDeletion does it: merging a REAL native process's stderr
         # with 2>&1 under 'Stop' turns its first stderr line into a terminating
         # NativeCommandError before anything here can read it. maint.ps1
-        # can still write to stderr (a binding error, e.g. an ambiguous switch).
+        # can still write to stderr (a binding error, e.g. -DryRun:abc).
         $run = {
             $prevEap = $ErrorActionPreference
             $ErrorActionPreference = 'Continue'
@@ -404,7 +404,7 @@ function Test-VerifyIsRefusedOutsideDefender {
 # help acts on nothing, so the applicability refusals have nothing to guard:
 # `help -NoClean` used to exit 1. A stray argument is still refused.
 function Test-HelpIgnoresApplicabilitySwitches {
-    foreach ($switch in @('-NoClean', '-Verify', '-DryRun', '-Unattended')) {
+    foreach ($switch in @('-NoClean', '-Verify')) {
         $r = Invoke-MaintSandbox -Arguments @('help', $switch)
         Assert-Eq 0 $r.ExitCode "help $switch exits 0"
         Assert-Contains $r.Stdout 'wsl-maint - Windows side' "help $switch prints usage"
@@ -425,6 +425,7 @@ function Test-OneLetterSwitchesAreUnambiguous {
     Assert-Eq 0 $v.ExitCode 'defender -V exits 0'
     Assert-Contains $v.Marker 'defender verify=True' '-V means -Verify'
     $n = Invoke-MaintSandbox -Arguments @('backup', '-N', '-U')
+    Assert-Eq 0 $n.ExitCode 'backup -N -U exits 0'
     Assert-Contains $n.Marker 'backup dry=False unattended=True noclean=True' '-N and -U keep their meaning'
 }
 
@@ -433,12 +434,11 @@ function Test-OneLetterSwitchesAreUnambiguous {
 # and its log; -Debug and -Verbose were accepted and ignored. All of them are
 # now stray arguments, refused with the reason in the log.
 function Test-CommonParametersAreRefusedAndLogged {
-    foreach ($switch in @('-E', '-O', '-W', '-I', '-Debug', '-Verbose')) {
-        $r = Invoke-MaintSandbox -Arguments @('audit', $switch)
-        Assert-Eq 1 $r.ExitCode "audit $switch exits 1"
-        Assert-Contains $r.Log "[err] unknown argument: $switch" "$switch is named in the log"
-        Assert-NotContains $r.Marker 'wsl' "audit $switch does not run"
-    }
+    $stray = @('-E', '-O', '-W', '-I', '-Debug', '-Verbose')
+    $r = Invoke-MaintSandbox -Arguments (@('audit') + $stray)
+    Assert-Eq 1 $r.ExitCode 'audit with common-parameter switches exits 1'
+    Assert-Contains $r.Log ('[err] unknown argument: ' + ($stray -join ' ')) 'every one is named in the log'
+    Assert-NotContains $r.Marker 'wsl' 'audit does not run'
 }
 
 # Guards the fix above: a new switch sharing a first letter with another
@@ -448,6 +448,11 @@ function Test-SwitchesStartWithDistinctLetters {
     $names = @($ast.ParamBlock.Parameters | ForEach-Object { $_.Name.VariablePath.UserPath })
     $letters = @($names | ForEach-Object { $_.Substring(0, 1).ToUpperInvariant() } | Sort-Object -Unique)
     Assert-Eq $names.Count $letters.Count ('maint.ps1 parameters start with distinct letters: ' + ($names -join ', '))
+    # Either attribute makes the script advanced and brings the common
+    # parameters, and their ambiguous prefixes, back.
+    Assert-Eq 0 @($ast.ParamBlock.Attributes).Count 'maint.ps1 has no [CmdletBinding()]'
+    $paramAttrs = @($ast.ParamBlock.Parameters.Attributes | Where-Object { $_.TypeName.Name -eq 'Parameter' })
+    Assert-Eq 0 $paramAttrs.Count 'no maint.ps1 parameter carries [Parameter()]'
 }
 
 # --- End-of-run pause in the UAC-relaunched child ----------------------------
