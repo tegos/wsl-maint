@@ -1,9 +1,17 @@
-[CmdletBinding()]
+# A simple script on purpose: no [CmdletBinding()] and no [Parameter()], since
+# either makes it advanced and adds the common parameters. With them, -E, -O,
+# -W and -I were each ambiguous between two common parameters and died in
+# param() binding, before the try below and its log, and -Debug/-Verbose were
+# accepted and ignored. Without them, an unknown switch or a second positional
+# lands in $args and is refused in the try. Malformed input can still die in
+# binding (-DryRun:abc, -C with no value, a switch given twice, a bare - or --);
+# maint.bat's failure pause keeps that reason on screen. Keep the switches on
+# distinct first letters (Test-Maint.ps1 checks), so every one-letter
+# abbreviation stays unambiguous.
 param(
     # Checked inside the try below, not by ValidateSet: a binding error stops
     # the script before any of it runs, so a typo (maint.bat compcat) never
     # reached the log and the elevated window closed without its keypress.
-    [Parameter(Position = 0)]
     [string]$Command = 'help',
 
     [switch]$DryRun,
@@ -13,12 +21,7 @@ param(
 
     # Internal: maint.bat passes it only on the UAC relaunch (and never with
     # -Unattended), whose new window would otherwise close with the output.
-    [Parameter(DontShow)]
-    [switch]$PauseAtEnd,
-
-    # Anything else (an unknown switch, a second positional): refused in the try.
-    [Parameter(ValueFromRemainingArguments = $true, DontShow)]
-    [string[]]$Rest
+    [switch]$PauseAtEnd
 )
 
 $ErrorActionPreference = 'Stop'
@@ -78,14 +81,19 @@ $failed = $false
 try {
     $commands = 'full', 'backup', 'compact', 'winclean', 'defender', 'audit', 'clean', 'docker', 'help'
     if ($Command -notin $commands) { throw ("unknown command '$Command'; one of: " + ($commands -join ', ')) }
-    if ($Rest) { throw ('unknown argument: ' + ($Rest -join ' ') + '; see maint.bat help') }
-    # Inside the try: a broken maint.conf stops every command, help aside,
-    # before it does anything, and its file:line reason reaches the log.
-    if ($Command -ne 'help') { $cfg = Get-MaintConfig }
-    # Refused rather than ignored: `clean -NoClean` would otherwise clean.
-    if ($NoClean -and $Command -notin 'backup', 'full') { throw '-NoClean applies to backup and full only' }
-    # Same for -Verify: `full -Verify` would otherwise back up and compact.
-    if ($Verify -and $Command -ne 'defender') { throw '-Verify applies to defender only' }
+    # .Count, not truthiness: @('') is falsy, so `backup ""` would slip through.
+    if ($args.Count) { throw ('unknown argument: ' + ($args -join ' ') + '; see maint.bat help') }
+    # help acts on nothing: it reads no config and no switch guard applies,
+    # so `help -NoClean` prints usage instead of exiting 1.
+    if ($Command -ne 'help') {
+        # Inside the try: a broken maint.conf stops every command before it
+        # does anything, and its file:line reason reaches the log.
+        $cfg = Get-MaintConfig
+        # Refused rather than ignored: `clean -NoClean` would otherwise clean.
+        if ($NoClean -and $Command -notin 'backup', 'full') { throw '-NoClean applies to backup and full only' }
+        # Same for -Verify: `full -Verify` would otherwise back up and compact.
+        if ($Verify -and $Command -ne 'defender') { throw '-Verify applies to defender only' }
+    }
     switch ($Command) {
         'help'     { Show-Usage }
         'audit'    { Invoke-Wsl (Get-MaintWslArgs $cfg 'audit') }
