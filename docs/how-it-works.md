@@ -395,6 +395,7 @@ To adapt it, copy `maint.conf.example` to `maint.conf` (no code changes needed),
 `PROTECTED_PATTERNS` in `wsl/lib/common.sh` if your protected list differs, and put your
 own caches in `rules.conf` (start from `maint audit` or `du -xh -d2 ~ | sort -h`).
 
-Dependencies: inside WSL bash, coreutils, `jq`, `zstd`, `numfmt`. On Windows PowerShell
+Dependencies: inside WSL bash, GNU coreutils (`du -b`, `numfmt`, `tail -z`) and findutils
+(`find -printf`), `jq`, `zstd`. On Windows PowerShell
 5.1 and the Hyper-V module for `Optimize-VHD` (Pro/Enterprise only). On Home,
 `diskpart compact vdisk` might work, but that path is untested.

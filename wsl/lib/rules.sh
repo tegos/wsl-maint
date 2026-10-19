@@ -224,8 +224,11 @@ rule_targets() {
   local path="$1" policy="$2" arg="$3"
   [ -d "$path" ] || return 0
   case "$policy" in
+    # find's stderr is kept for purge and keep-newest: pipefail already failed
+    # the rule when the walk failed, but with the reason discarded "N rule(s)
+    # failed" was all a busybox find (no -printf) or an unreadable root said.
     purge)
-      find "$path" -mindepth 1 -maxdepth 1 -printf '%P\0' 2>/dev/null \
+      find "$path" -mindepth 1 -maxdepth 1 -printf '%P\0' \
         | _emit_entries "$path" purge
       ;;
     age)
@@ -235,7 +238,7 @@ rule_targets() {
       local keep="$arg"
       # NUL-separated through the ranking too: a newline-named entry still
       # takes its place by mtime, and is only dropped once it is a target.
-      find "$path" -mindepth 1 -maxdepth 1 -printf '%T@ %P\0' 2>/dev/null \
+      find "$path" -mindepth 1 -maxdepth 1 -printf '%T@ %P\0' \
         | sort -z -rn | tail -z -n "+$((keep + 1))" | cut -z -d' ' -f2- \
         | _emit_entries "$path" keep-newest
       ;;

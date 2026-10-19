@@ -29,7 +29,9 @@ backup verification. Why the split: [docs/how-it-works.md](docs/how-it-works.md)
   `maint space` finds the distro disk through the WSL registry (`reg.exe` over interop),
   so imported distros and disks off `C:` work; without interop it falls back to the
   Store package folder.
-- `jq` and `zstd` inside the distro.
+- Inside the distro: GNU coreutils and findutils (what Debian, Ubuntu, Fedora and openSUSE
+  ship; a busybox-based distro such as Alpine needs `apk add coreutils findutils`), plus
+  `jq` and `zstd`.
 - Admin for `full`, `backup`, `compact` and `defender`; `maint.bat` asks through UAC.
 - The Hyper-V PowerShell module for `compact` and `full` (Windows Home lacks it;
   everything else works there).

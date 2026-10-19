@@ -324,6 +324,15 @@ assert_fails "(PATH=\"$TMP/fakefind:\$PATH\"; rule_run \"$TMP/age-fail\" age 30d
 err=$(PATH="$TMP/fakefind:$PATH"; rule_targets "$TMP/age-fail" age 30d 2>&1 >/dev/null)
 assert_contains "$err" "simulated walk error" "age: find's own error text is in the warning"
 assert_fails "case \":$PATH:\" in *fakefind*) true ;; *) false ;; esac" "the fake find did not leak into PATH"
+# purge and keep-newest fail the same way, and say why: their find's stderr
+# used to be discarded, so a busybox find (no -printf) left "rule(s) failed"
+# as the only word.
+for pol in "purge -" "keep-newest 1"; do
+  assert_fails "(PATH=\"$TMP/fakefind:\$PATH\"; rule_targets \"$TMP/age-fail\" $pol >/dev/null 2>&1)" \
+    "$pol: a failed walk makes rule_targets fail"
+  err=$(PATH="$TMP/fakefind:$PATH"; rule_targets "$TMP/age-fail" $pol 2>&1 >/dev/null)
+  assert_contains "$err" "simulated walk error" "$pol: find's own error text reaches stderr"
+done
 
 # A timestamp in the future is unknown, not "used now": a file dated 2030 would
 # otherwise pin its entry until 2030. The entry falls back to its other times.
