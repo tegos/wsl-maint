@@ -32,8 +32,14 @@ function Get-MaintConfig {
         if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { return $cfg }
     }
 
+    # -Encoding UTF8: without it Windows PowerShell 5.1 decodes a BOM-less
+    # file with the ANSI code page, while the WSL side reads UTF-8 bytes.
+    # Notepad (since Windows 10 1903) and VS Code write UTF-8 without a BOM,
+    # so a non-ASCII backup_root became a different, mojibake path on this
+    # half: the archives went there and `maint verify` never found them.
+    # PS 5.1's UTF8 reader honours (and strips) a BOM when there is one.
     $n = 0
-    foreach ($raw in @(Get-Content -LiteralPath $file)) {
+    foreach ($raw in @(Get-Content -LiteralPath $file -Encoding UTF8)) {
         $n++
         $at = "${file}:$n"
         # A BOM is what Notepad and PS 5.1's UTF8 encoding put in front of line 1.

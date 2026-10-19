@@ -3,6 +3,7 @@
 # never executed. Format: key = value, one per line; lines starting with # are
 # comments; values are taken literally; an empty value means the default.
 # An unknown key or a line without = stops every command with file:line.
+# Save as UTF-8 (with or without BOM): both halves read it that way.
 
 # WSL distro to export, compact and call; backup archives are named <distro>_* (lowercased). Default: Ubuntu
 distro = Ubuntu
