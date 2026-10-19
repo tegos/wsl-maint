@@ -21,6 +21,11 @@ is_consent() {
   esac
 }
 
+# Lowercase under the C locale. `${x,,}` folds by the current locale, and
+# tr_TR turns `I` into dotless `ı`: a drive letter I: became /mnt/ı and a
+# distro with an I a prefix no archive carries. A subshell, so LC_ALL stays.
+lc_ascii() ( LC_ALL=C; printf '%s\n' "${1,,}" )
+
 human() {
   local b="${1:-0}"
   numfmt --to=iec --format='%.1f' "$b" 2>/dev/null || echo "${b}B"

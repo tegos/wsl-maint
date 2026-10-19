@@ -153,7 +153,7 @@ case "$CMD" in
     fi
     # Same prefix the Windows side names and rotates archives by: the
     # lowercased distro plus "_" (Ubuntu -> ubuntu_*.tar.zst).
-    prefix="${CFG_DISTRO,,}_"
+    prefix="$(lc_ascii "$CFG_DISTRO")_"
     # Only names Windows retention counts (Invoke-BackupRetention, which
     # matches case-insensitively too): <prefix>yyyy-MM-dd_HHmm.tar.zst. The
     # loose <prefix>*.tar.zst would also take another distro's archive

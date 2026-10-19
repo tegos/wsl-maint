@@ -253,6 +253,23 @@ printf '%s\n' 'backup_root = Q:\Backups\WSL' > "$TMP/verify-default.conf"
 MAINT_MNT_BASE="$TMP/mnt" "$MAINT" verify --config "$TMP/verify-default.conf" >/dev/null 2>&1
 assert_eq "zstd -t $BK/ubuntu_2026-02-01_0100.tar.zst" "$(cat "$TMP/zstd.calls")" "default distro Ubuntu verifies the newest archive in retention's name shape, not a newer look-alike"
 
+# Lowercasing is locale-independent: under tr_TR `${x,,}` maps I to dotless
+# ı, so I:\ became /mnt/ı and Ubuntu-IoT the prefix ubuntu-ıot_, which the
+# Windows side (ToLowerInvariant) never writes. Needs a generated locale;
+# skipped where localedef cannot make one.
+if mkdir -p "$TMP/loc" && localedef -i tr_TR -f UTF-8 "$TMP/loc/tr_TR.UTF-8" >/dev/null 2>&1; then
+  mkdir -p "$TMP/mnt/i/wsl"
+  printf 'x' > "$TMP/mnt/i/wsl/ubuntu-iot_2026-02-01_0100.tar.zst"
+  printf '%s\n' 'backup_root = I:\wsl' 'distro = Ubuntu-IoT' > "$TMP/verify-tr.conf"
+  : > "$TMP/zstd.calls"
+  rc=0
+  LOCPATH="$TMP/loc" LC_ALL=tr_TR.UTF-8 MAINT_MNT_BASE="$TMP/mnt" "$MAINT" verify --config "$TMP/verify-tr.conf" >/dev/null 2>&1 || rc=$?
+  assert_eq "0" "$rc" "verify under tr_TR exits 0 for I:\ and a distro with an I"
+  assert_eq "zstd -t $TMP/mnt/i/wsl/ubuntu-iot_2026-02-01_0100.tar.zst" "$(cat "$TMP/zstd.calls")" "verify under tr_TR lowercases I to i"
+else
+  echo "SKIP tr_TR locale cannot be generated here"
+fi
+
 # A root that is not a local drive path is refused, not mangled.
 printf '%s\n' 'backup_root = \\server\share' > "$TMP/unc.conf"
 rc=0

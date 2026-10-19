@@ -105,7 +105,9 @@ function ConvertTo-WslPath {
     # relative) is refused rather than silently mangled.
     param([Parameter(Mandatory)][string]$WindowsPath, [string]$What = 'path')
     Assert-LocalDrivePath $WindowsPath -What $What
-    "/mnt/" + $WindowsPath.Substring(0, 1).ToLower() + $WindowsPath.Substring(2).Replace('\', '/')
+    # ToLowerInvariant: .ToLower() follows the user's culture, and tr-TR maps
+    # I to dotless i, so I:\ became /mnt/<dotless i> and every WSL call failed.
+    "/mnt/" + $WindowsPath.Substring(0, 1).ToLowerInvariant() + $WindowsPath.Substring(2).Replace('\', '/')
 }
 
 function Get-LxssDistroEntries {

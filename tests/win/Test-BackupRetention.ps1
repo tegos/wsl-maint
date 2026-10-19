@@ -689,6 +689,18 @@ function Test-ConvertToWslPathMapsDriveLetter {
     Assert-Eq '/mnt/d/backups/u.tar' (ConvertTo-WslPath 'D:/backups/u.tar') 'X:/ is a drive path too'
 }
 
+# The drive letter is lowercased culture-invariantly: under tr-TR a culture
+# ToLower() turns I into dotless i (U+0131), a path WSL does not have.
+function Test-ConvertToWslPathLowercasesTheDriveInvariantly {
+    $prev = [Threading.Thread]::CurrentThread.CurrentCulture
+    try {
+        [Threading.Thread]::CurrentThread.CurrentCulture = [Globalization.CultureInfo]::GetCultureInfo('tr-TR')
+        Assert-Eq '/mnt/i/wsl/u.tar' (ConvertTo-WslPath 'I:\wsl\u.tar') 'I: maps to /mnt/i under tr-TR'
+    } finally {
+        [Threading.Thread]::CurrentThread.CurrentCulture = $prev
+    }
+}
+
 function Test-ConvertToWslPathRefusesNonDrivePaths {
     foreach ($bad in @('\\server\share\backups', 'backups\wsl', 'D:relative')) {
         $err = $null
@@ -872,6 +884,7 @@ Test-DryRunProducesNoArchiveAndNoDeletion
 Test-DryRunCreatesNoDirectoryAndStartsNoDistro
 Test-RealRunCreatesRootAndProbesZstd
 Test-ConvertToWslPathMapsDriveLetter
+Test-ConvertToWslPathLowercasesTheDriveInvariantly
 Test-ConvertToWslPathRefusesNonDrivePaths
 Test-UncBackupRootRefusedBeforeAnything
 Test-MissingBackupRootRefusesAndNamesTheKey

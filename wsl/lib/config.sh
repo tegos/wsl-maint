@@ -136,5 +136,5 @@ config_wsl_path() {
     *) return 1 ;;
   esac
   local drive="${p:0:1}" rest="${p:2}"
-  printf '%s/%s%s\n' "${MAINT_MNT_BASE:-/mnt}" "${drive,,}" "${rest//\\//}"
+  printf '%s/%s%s\n' "${MAINT_MNT_BASE:-/mnt}" "$(lc_ascii "$drive")" "${rest//\\//}"
 }
