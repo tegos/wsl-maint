@@ -80,9 +80,20 @@ assert_contains "$out" "not stale" "--if-stale 010 means 10 days, not octal 8"
 # `shift` failing there is an unshielded simple command, so under this
 # script's `set -e` the whole CLI died with exit 1 and no output at all
 # instead of reporting a usable error. It must now fail loudly.
-assert_fails "$MAINT clean --if-stale >/dev/null 2>&1" "--if-stale without a value fails"
-err=$("$MAINT" clean --if-stale 2>&1 1>/dev/null)
-assert_contains "$err" "--if-stale needs" "--if-stale without a value explains why"
+rc=0; err=$("$MAINT" clean --if-stale 2>&1 1>/dev/null) || rc=$?
+assert_eq "2" "$rc" "--if-stale without a value exits 2"
+assert_contains "$err" "[err ] --if-stale needs" "--if-stale without a value explains why"
+# Same for the other value-taking flags: `${2:?}` used to exit 1 with bash's
+# own "line N: 2:" message instead of the CLI's usage error.
+for flag in --rules --config; do
+  rc=0; err=$("$MAINT" audit $flag 2>&1 1>/dev/null) || rc=$?
+  assert_eq "2" "$rc" "$flag without a value exits 2"
+  assert_contains "$err" "[err ] $flag needs a path" "$flag without a value explains why"
+  rc=0; err=$("$MAINT" audit $flag "" 2>&1 1>/dev/null) || rc=$?
+  assert_eq "2" "$rc" "$flag with an empty value exits 2"
+done
+rc=0; err=$("$MAINT" clean --if-stale "" 2>&1 1>/dev/null) || rc=$?
+assert_eq "2" "$rc" "--if-stale with an empty value exits 2"
 
 # Regression: --if-stale with a non-numeric value used to reach
 # state_is_stale unvalidated, hit `$(( days * 86400 ))` in state.sh with a

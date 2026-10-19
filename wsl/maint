@@ -75,7 +75,11 @@ while [ $# -gt 0 ]; do
     --yes)      ASSUME_YES=1; shift ;;
     --named-volumes) NAMED_VOLUMES=1; shift ;;
     --if-stale)
-      IF_STALE="${2:?--if-stale needs a number of days}"
+      # An explicit check, not `${2:?...}`: that expansion aborts with bash's
+      # own "line N: 2:" message and exit 1, the "failure" code, where every
+      # other parse error here is a usage error (exit 2, `[err ]` line).
+      [ $# -ge 2 ] || { log_err "--if-stale needs a number of days"; exit 2; }
+      IF_STALE="$2"
       # A trailing "d" is accepted because that is how every duration in
       # rules.conf is written (`age 30d`) and how the design doc spells this
       # flag (`--if-stale 7d`); rejecting it made the documented invocation
@@ -89,8 +93,12 @@ while [ $# -gt 0 ]; do
       IF_STALE=$((10#$IF_STALE))
       shift 2
       ;;
-    --rules)    RULES_FILE="${2:?--rules needs a path}"; shift 2 ;;
-    --config)   CONFIG_FILE="${2:?--config needs a path}"; shift 2 ;;
+    --rules)
+      [ $# -ge 2 ] && [ -n "$2" ] || { log_err "--rules needs a path"; exit 2; }
+      RULES_FILE="$2"; shift 2 ;;
+    --config)
+      [ $# -ge 2 ] && [ -n "$2" ] || { log_err "--config needs a path"; exit 2; }
+      CONFIG_FILE="$2"; shift 2 ;;
     -h|--help)  usage; exit 0 ;;
     *)          log_err "unknown flag: $1"; usage; exit 2 ;;
   esac
