@@ -18,6 +18,12 @@
 # file with no patterns, or a failed find or grep. Each of those would
 # otherwise leave part of the tree unscanned and read as clean.
 set -uo pipefail
+# Byte-wise matching everywhere. Under a UTF-8 locale (WSL's default) grep
+# treats input holding an invalid byte (a cp1252 "é" from a Windows editor)
+# as binary and drops the matching line while still exiting 0, and bash
+# `read` loses a line that ends in one; a real hit then read as clean. -i
+# therefore folds ASCII letters only.
+export LC_ALL=C
 
 usage() { echo "usage: $0 <tree> <pattern-file>" >&2; exit 2; }
 fail() { echo "pre-publish-scan: $1" >&2; exit 2; }
@@ -47,14 +53,14 @@ out=$(printf '%s' "$out" | sed 's|^\./||')
 # Names leak too: match every path (relative to <tree>) and every symlink
 # target. grep -r does not follow symlinks, so a target is never read above.
 tree_paths=$(find . -mindepth 1 -name .git -prune -o -printf '%P\n') || fail "find failed listing paths"
-paths=$(printf '%s\n' "$tree_paths" | grep -iF -f "$clean")
+paths=$(printf '%s\n' "$tree_paths" | grep -aiF -f "$clean")
 [ $? -gt 1 ] && fail "grep failed matching paths"
 paths=$(printf '%s' "$paths" | sed 's|^|path: |')
 symlinks=$(find . -name .git -prune -o -type l -printf '%P\t%l\n') || fail "find failed listing symlinks"
 links=""
 while IFS=$'\t' read -r p t; do
   [ -n "$p" ] || continue
-  printf '%s\n' "$t" | grep -qiF -f "$clean"
+  printf '%s\n' "$t" | grep -qaiF -f "$clean"
   case $? in
     0) links+="symlink: $p -> $t"$'\n' ;;
     1) ;;
@@ -62,7 +68,9 @@ while IFS=$'\t' read -r p t; do
   esac
 done <<< "$symlinks"
 
-hits=$(printf '%s\n' "$out" "$paths" "$links" | grep -v '^$')
+# -a here too: this filter re-reads the hits, and an invalid byte in one of
+# them made grep call the whole stream binary and print nothing.
+hits=$(printf '%s\n' "$out" "$paths" "$links" | grep -av '^$')
 if [ -n "$hits" ]; then
   printf '%s\n' "$hits"
   echo "pre-publish-scan: $(printf '%s\n' "$hits" | wc -l) match(es), do not publish" >&2

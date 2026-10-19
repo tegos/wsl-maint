@@ -58,6 +58,26 @@ assert_eq 1 "$rc" "name-only match exits 1"
 assert_contains "$out" "path: acme-widgets-notes" "directory name reported"
 assert_contains "$out" "path: report-ACME-WIDGETS.txt" "file name reported case-insensitively"
 assert_contains "$out" "symlink: link -> /home/jdoe/secret" "symlink target reported"
+
+# A byte that is not valid UTF-8 (cp1252 text from a Windows editor) next to
+# a hit, in a content line, a file name or a symlink target. Under a UTF-8
+# locale grep called the stream binary and dropped the line, bash `read`
+# lost a target ending in one, and the scan printed "clean" with exit 0.
+bytes="$tmp/bytes"
+mkdir -p "$bytes"
+printf 'client acme-widgets caf\xe9\n' > "$bytes/notes.txt"
+printf 'plain\n' > "$bytes/acme-widgets-caf\xe9.txt"
+ln -s "/home/jdoe/caf\xe9" "$bytes/link-mid"
+ln -s "/home/jdoe/x\xe9" "$bytes/link-end"
+for loc in C.UTF-8 C; do
+  out=$(LC_ALL=$loc bash "$scan" "$bytes" "$pats" 2>&1); rc=$?
+  assert_eq 1 "$rc" "invalid bytes: match exits 1 under $loc"
+  assert_contains "$out" "notes.txt:1:" "invalid bytes: content hit listed under $loc"
+  assert_contains "$out" "path: acme-widgets-caf" "invalid bytes: file name hit listed under $loc"
+  assert_contains "$out" "symlink: link-mid -> " "invalid bytes: symlink target hit listed under $loc"
+  assert_contains "$out" "symlink: link-end -> " "invalid bytes: symlink target ending in one listed under $loc"
+  assert_eq 4 "$(printf '%s\n' "$out" | grep -ac 'notes.txt:1:\|^path: \|^symlink: ')" "invalid bytes: all four hits listed under $loc"
+done
 assert_fails '[[ "$out" == *"path: link"* ]]' "symlink with a clean name not listed as a path"
 
 # Pattern lines are trimmed: a trailing space must not hide a match, and a
@@ -94,7 +114,7 @@ bash "$scan" "$ftree" "$pats" >/dev/null 2>&1; rc=$?
 assert_eq 0 "$rc" "the fixture tree is clean without fakes"
 fake find "$real_find" '*" -mindepth "*'; scan_broken "failed find listing paths"
 fake find "$real_find" '*" -type l "*'; scan_broken "failed find listing symlinks"
-fake grep "$real_grep" '" -iF -f "*'; scan_broken "failed grep matching paths"
-fake grep "$real_grep" '" -qiF -f "*'; scan_broken "failed grep matching symlink targets"
+fake grep "$real_grep" '" -aiF -f "*'; scan_broken "failed grep matching paths"
+fake grep "$real_grep" '" -qaiF -f "*'; scan_broken "failed grep matching symlink targets"
 
 echo "RESULT $ASSERT_PASS $ASSERT_FAIL"
