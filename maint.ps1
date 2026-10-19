@@ -2,8 +2,9 @@
 # either makes it advanced and adds the common parameters. With them, -E, -O,
 # -W and -I were each ambiguous between two common parameters and died in
 # param() binding, before the try below and its log, and -Debug/-Verbose were
-# accepted and ignored. Without them, an unknown switch or a second positional
-# lands in $args and is refused in the try. Malformed input can still die in
+# accepted and ignored. Without them, an unknown switch or a third positional
+# lands in $args and is refused in the try (a second binds to -MaintConfig and
+# is refused there unless it carries maint.bat's cfg: prefix). Malformed input can still die in
 # binding (-DryRun:abc, -C with no value, a switch given twice, a bare - or --);
 # maint.bat's failure pause keeps that reason on screen. Keep the switches on
 # distinct first letters (Test-Maint.ps1 checks), so every one-letter
@@ -26,8 +27,9 @@ param(
     # Internal: maint.bat passes the caller's WSL_MAINT_CONFIG on the UAC
     # relaunch, because the elevated child gets a fresh environment and would
     # otherwise silently read the repo-root maint.conf instead. A [string] in
-    # a non-advanced script is also positional, so the try below only accepts
-    # a drive path here and refuses anything else as a stray argument.
+    # a non-advanced script is also positional, so maint.bat sends the value
+    # as cfg:<full path> and the try below refuses anything without that
+    # prefix as a stray argument, a drive path (`backup D:\x`) included.
     [string]$MaintConfig
 )
 
@@ -90,11 +92,14 @@ try {
     if ($Command -notin $commands) { throw ("unknown command '$Command'; one of: " + ($commands -join ', ')) }
     # .Count, not truthiness: @('') is falsy, so `backup ""` would slip through.
     if ($args.Count) { throw ('unknown argument: ' + ($args -join ' ') + '; see maint.bat help') }
-    # A second positional (`backup extra`, `backup ""`) binds to -MaintConfig
-    # before it could reach $args, so it is refused here by shape instead.
+    # A second positional (`backup extra`, `backup D:\x`) binds to
+    # -MaintConfig before it could reach $args, so only maint.bat's cfg:
+    # prefix is accepted here and anything else is a stray argument.
     if ($PSBoundParameters.ContainsKey('MaintConfig')) {
-        if ($MaintConfig -notmatch '^[A-Za-z]:[\\/]') { throw ('unknown argument: ' + $MaintConfig + '; see maint.bat help') }
-        $env:WSL_MAINT_CONFIG = $MaintConfig
+        if (-not $MaintConfig.StartsWith('cfg:')) { throw ('unknown argument: ' + $MaintConfig + '; see maint.bat help') }
+        $forwarded = $MaintConfig.Substring(4)
+        if (-not $forwarded) { throw 'WSL_MAINT_CONFIG was forwarded empty across the UAC relaunch' }
+        $env:WSL_MAINT_CONFIG = $forwarded
     }
     # help acts on nothing: it reads no config and no switch guard applies,
     # so `help -NoClean` prints usage instead of exiting 1.

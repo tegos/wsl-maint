@@ -277,16 +277,17 @@ function Test-ConfigOverrideReachesTheWslSideForEveryProxyVerb {
 
 # The UAC relaunch cannot pass the caller's environment on, so maint.bat
 # forwards a session-scoped WSL_MAINT_CONFIG as the internal -MaintConfig
-# <path>. It must select the same file, for this half and for the --config
-# the WSL side gets, and a bare second positional must still be refused: as a
-# [string] parameter it would otherwise bind there instead of landing in $args.
+# cfg:<path>. It must select the same file, for this half and for the --config
+# the WSL side gets, and a bare second positional must still be refused, a
+# drive path included: as a [string] parameter it binds there instead of
+# landing in $args, and only the cfg: prefix tells maint.bat's value apart.
 function Test-MaintConfigSwitchSelectsTheOverrideAcrossTheUacRelaunch {
     $dir = New-TestDir 'maint-conf'
     try {
         $alt = Join-Path $dir 'alt.conf'
         Set-Content -LiteralPath $alt -Value 'distro = Alpine'
         foreach ($switch in @('-MaintConfig', '-M')) {
-            $r = Invoke-MaintSandbox -Arguments @('audit', $switch, $alt) -ConfLines @('distro = Debian')
+            $r = Invoke-MaintSandbox -Arguments @('audit', $switch, ('cfg:' + $alt)) -ConfLines @('distro = Debian')
             Assert-Eq 0 $r.ExitCode "audit $switch exits 0"
             Assert-Match $r.Marker "(?m)^wsl -d Alpine -- /mnt/[a-z]/\S*/wsl/maint audit --config /mnt/[a-z]/\S*/alt\.conf$" "$switch selects the override and hands it to wsl/maint"
         }
@@ -294,6 +295,13 @@ function Test-MaintConfigSwitchSelectsTheOverrideAcrossTheUacRelaunch {
         Assert-Eq 1 $r.ExitCode 'a bare second positional is still refused'
         Assert-Contains $r.Log '[err] unknown argument: extra' 'and named as a stray argument'
         Assert-Eq '' $r.Marker.Trim() 'it performs no action'
+        $r = Invoke-MaintSandbox -Arguments @('audit', $alt)
+        Assert-Eq 1 $r.ExitCode 'a bare drive-path positional is refused, not taken as the config'
+        Assert-Contains $r.Log ('[err] unknown argument: ' + $alt) 'and named as a stray argument'
+        Assert-Eq '' $r.Marker.Trim() 'it performs no action either'
+        $r = Invoke-MaintSandbox -Arguments @('audit', '-MaintConfig', 'cfg:')
+        Assert-Eq 1 $r.ExitCode 'an empty forwarded config is refused'
+        Assert-Contains $r.Log 'forwarded empty' 'with a reason that names the forwarding'
     } finally { Remove-TestDir $dir }
 }
 
