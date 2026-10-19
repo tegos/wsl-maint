@@ -43,10 +43,16 @@ _rule_arg_ok() {
 # split such a path into fragments and bind the wrong columns, then drop the
 # line without a word.
 rules_parse() {
-  local file="$1" line path policy arg auto rc=0
+  local file="$1" line path policy arg auto rc=0 n=0
   [ -f "$file" ] || { log_err "rules file not found: $file"; return 1; }
   # `|| [ -n "$line" ]` so a last line with no trailing newline is still read.
   while IFS= read -r line || [ -n "$line" ]; do
+    n=$((n + 1))
+    # A BOM is what Notepad and PS 5.1's UTF8 encoding put in front of line 1
+    # (config.sh strips it the same way). Left in, it became part of a
+    # first-line rule's path, which then matched no directory and silently
+    # freed nothing, or a lone invisible "malformed rule" before a comment.
+    [ "$n" -eq 1 ] && line="${line#$'\xef\xbb\xbf'}"
     line="${line%%#*}"
     [[ "$line" =~ [^[:space:]] ]] || continue
     if [[ ! "$line" =~ ^[[:space:]]*(.*[^[:space:]])[[:space:]]+([^[:space:]]+)[[:space:]]+([^[:space:]]+)[[:space:]]+([^[:space:]]+)[[:space:]]*$ ]]; then

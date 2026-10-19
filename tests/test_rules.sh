@@ -58,6 +58,13 @@ assert_fails "rules_parse \"$TMP/pipe.conf\" 2>/dev/null" "a path containing | i
 printf '/tmp/x purge - yes' > "$TMP/no-newline.conf"
 assert_eq "/tmp/x|purge|-|yes" "$(rules_parse "$TMP/no-newline.conf")" "last line without a trailing newline is read"
 
+# A UTF-8 BOM (Notepad, PS 5.1 Out-File -Encoding UTF8) is not part of the
+# first rule's path, and not a malformed rule in front of a first-line comment.
+printf '\xef\xbb\xbf~/x purge - yes\n' > "$TMP/bom.conf"
+assert_eq "$HOME/x|purge|-|yes" "$(rules_parse "$TMP/bom.conf" 2>/dev/null)" "a BOM before the first rule is dropped"
+printf '\xef\xbb\xbf# comment\r\n~/x purge - yes\r\n' > "$TMP/bom2.conf"
+assert_eq "$HOME/x|purge|-|yes" "$(rules_parse "$TMP/bom2.conf" 2>/dev/null)" "a BOM before a first-line comment is not a rule"
+
 # --- parser: policy args are validated ---
 # Regression: the arg passed unchecked. `age` strips one lowercase `d` and awk
 # compared the rest as text, so `age 30D` / `age 1w` deleted 5-day-old entries
