@@ -64,6 +64,8 @@ trap 'rm -rf "$TMP"' EXIT
 
 mkdir -p "$TMP/bin" "$TMP/empty-bin"
 export FAKE_DOCKER_CALLS="$TMP/calls.log"
+# Never truncated: every verb the shim ever saw, for the whitelist check at the end.
+export FAKE_DOCKER_ALL_CALLS="$TMP/all-calls.log"
 export FAKE_DOCKER_DANGLING_FILE="$TMP/dangling.txt"
 export FAKE_DOCKER_SURVIVORS_FILE="$TMP/survivors.txt"
 export FAKE_DOCKER_PRUNED_MARK="$TMP/pruned.mark"
@@ -72,6 +74,7 @@ cat > "$TMP/bin/docker" <<'SHIM'
 #!/usr/bin/env bash
 set -uo pipefail
 echo "$*" >> "$FAKE_DOCKER_CALLS"
+echo "$*" >> "$FAKE_DOCKER_ALL_CALLS"
 case "$1" in
   info) exit 0 ;;
   system)
@@ -110,7 +113,10 @@ JSON
     esac
     ;;
 esac
-exit 0
+# Anything else is a verb docker_prune must not issue (README: "Never: Docker
+# images"); fail loudly rather than pretend it worked.
+echo "fake docker: unexpected verb: $*" >&2
+exit 2
 SHIM
 chmod +x "$TMP/bin/docker"
 # $TMP/bin first so the shim wins the lookup for "docker" specifically;
@@ -446,5 +452,14 @@ cli_out=$(STATE_FILE="$TMP/state" ../wsl/maint docker --dry-run --named-volumes 
 assert_contains "$cli_out" "DRY docker volume rm (3 dangling volumes)" "without docker_guard_extra the project volume is not guarded"
 out=$(../wsl/maint help 2>&1)
 assert_contains "$out" "--named-volumes" "help documents --named-volumes"
+
+# --- every verb docker_prune issued, across all the runs above ---
+# README "Never: Docker images" / how-it-works "Images are never touched" have
+# no other check: the shim used to exit 0 for any verb, so an added
+# `image prune -af`, `container prune -f`, `system prune` or a guard-bypassing
+# `volume prune -f` passed every assertion above.
+stray=$(grep -vxE 'info|system df --format \{\{json \.\}\}|builder prune -af|volume ls -q -f dangling=true|volume rm .*|volume inspect .*' "$FAKE_DOCKER_ALL_CALLS")
+assert_eq "" "$stray" "docker_prune issues no verb beyond info / system df / builder prune / volume ls|rm|inspect"
+assert_ok "grep -qx 'builder prune -af' \"$FAKE_DOCKER_ALL_CALLS\"" "positive control: the whitelist log saw the build cache prune"
 
 echo "RESULT $ASSERT_PASS $ASSERT_FAIL"
