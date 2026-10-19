@@ -21,7 +21,14 @@ param(
 
     # Internal: maint.bat passes it only on the UAC relaunch (and never with
     # -Unattended), whose new window would otherwise close with the output.
-    [switch]$PauseAtEnd
+    [switch]$PauseAtEnd,
+
+    # Internal: maint.bat passes the caller's WSL_MAINT_CONFIG on the UAC
+    # relaunch, because the elevated child gets a fresh environment and would
+    # otherwise silently read the repo-root maint.conf instead. A [string] in
+    # a non-advanced script is also positional, so the try below only accepts
+    # a drive path here and refuses anything else as a stray argument.
+    [string]$MaintConfig
 )
 
 $ErrorActionPreference = 'Stop'
@@ -83,6 +90,12 @@ try {
     if ($Command -notin $commands) { throw ("unknown command '$Command'; one of: " + ($commands -join ', ')) }
     # .Count, not truthiness: @('') is falsy, so `backup ""` would slip through.
     if ($args.Count) { throw ('unknown argument: ' + ($args -join ' ') + '; see maint.bat help') }
+    # A second positional (`backup extra`, `backup ""`) binds to -MaintConfig
+    # before it could reach $args, so it is refused here by shape instead.
+    if ($PSBoundParameters.ContainsKey('MaintConfig')) {
+        if ($MaintConfig -notmatch '^[A-Za-z]:[\\/]') { throw ('unknown argument: ' + $MaintConfig + '; see maint.bat help') }
+        $env:WSL_MAINT_CONFIG = $MaintConfig
+    }
     # help acts on nothing: it reads no config and no switch guard applies,
     # so `help -NoClean` prints usage instead of exiting 1.
     if ($Command -ne 'help') {

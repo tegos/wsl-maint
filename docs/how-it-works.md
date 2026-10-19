@@ -235,7 +235,9 @@ would add the exclusions for real. The reverse holds too: every other verb refus
 
 `WSL_MAINT_CONFIG` set on Windows must name a file on a drive letter: the Windows side
 hands it to every `wsl/maint` call as `--config /mnt/<drive>/...`, so both halves read
-the same file and `docker_guard_extra` reaches the Docker prune. This, the `wsl/maint`
+the same file and `docker_guard_extra` reaches the Docker prune. `maint.bat` forwards it
+across the UAC relaunch (as the internal `-MaintConfig <path>`), since the elevated child
+does not inherit the caller's environment. This, the `wsl/maint`
 path and `backup_root` all assume drives mount at `/mnt/<letter>`; a different
 `[automount] root` in `/etc/wsl.conf` breaks the mapping.
 

@@ -275,6 +275,28 @@ function Test-ConfigOverrideReachesTheWslSideForEveryProxyVerb {
     } finally { Remove-TestDir $dir }
 }
 
+# The UAC relaunch cannot pass the caller's environment on, so maint.bat
+# forwards a session-scoped WSL_MAINT_CONFIG as the internal -MaintConfig
+# <path>. It must select the same file, for this half and for the --config
+# the WSL side gets, and a bare second positional must still be refused: as a
+# [string] parameter it would otherwise bind there instead of landing in $args.
+function Test-MaintConfigSwitchSelectsTheOverrideAcrossTheUacRelaunch {
+    $dir = New-TestDir 'maint-conf'
+    try {
+        $alt = Join-Path $dir 'alt.conf'
+        Set-Content -LiteralPath $alt -Value 'distro = Alpine'
+        foreach ($switch in @('-MaintConfig', '-M')) {
+            $r = Invoke-MaintSandbox -Arguments @('audit', $switch, $alt) -ConfLines @('distro = Debian')
+            Assert-Eq 0 $r.ExitCode "audit $switch exits 0"
+            Assert-Match $r.Marker "(?m)^wsl -d Alpine -- /mnt/[a-z]/\S*/wsl/maint audit --config /mnt/[a-z]/\S*/alt\.conf$" "$switch selects the override and hands it to wsl/maint"
+        }
+        $r = Invoke-MaintSandbox -Arguments @('backup', 'extra')
+        Assert-Eq 1 $r.ExitCode 'a bare second positional is still refused'
+        Assert-Contains $r.Log '[err] unknown argument: extra' 'and named as a stray argument'
+        Assert-Eq '' $r.Marker.Trim() 'it performs no action'
+    } finally { Remove-TestDir $dir }
+}
+
 # A broken maint.conf stops the command before it does anything, and the
 # reason (with file:line) reaches the log, not only the console.
 function Test-BrokenConfigStopsBeforeAnyAction {
@@ -497,10 +519,11 @@ function Test-RealPauseNeverBlocksANonInteractiveHost {
     Assert-NotContains $r.Stdout 'Press any key' 'no prompt is shown to a host that cannot answer'
 }
 
-# -PauseAtEnd is internal: it must stay out of the usage text.
+# -PauseAtEnd and -MaintConfig are internal: they must stay out of the usage text.
 function Test-PauseAtEndIsNotInUsage {
     $r = Invoke-MaintSandbox -Arguments @('help')
     Assert-NotContains $r.Stdout 'PauseAtEnd' 'the internal switch is not advertised'
+    Assert-NotContains $r.Stdout 'MaintConfig' 'the internal config parameter is not advertised'
 }
 
 Test-PauseAtEndPausesAfterASuccessfulRun
@@ -533,6 +556,7 @@ Test-CommonParametersAreRefusedAndLogged
 Test-SwitchesStartWithDistinctLetters
 Test-ConfigOverrideVariableWinsOverRepoFile
 Test-ConfigOverrideReachesTheWslSideForEveryProxyVerb
+Test-MaintConfigSwitchSelectsTheOverrideAcrossTheUacRelaunch
 Test-BrokenConfigStopsBeforeAnyAction
 
 # The native stand-in is compiled once for the file; a box without the in-box

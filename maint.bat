@@ -38,10 +38,13 @@ rem keeps it on screen.
 rem MAINT_UNATTENDED reaches
 rem this non-elevated powershell by normal inheritance; the elevated child
 rem would not see it (a UAC launch does not inherit the caller's environment),
-rem hence a switch on its command line instead.
+rem hence a switch on its command line instead. The same goes for a
+rem session-scoped WSL_MAINT_CONFIG: forwarded as -MaintConfig <path> (quoted
+rem like the script path, before the user's arguments) or the elevated run
+rem would silently read the repo-root maint.conf instead of the one chosen.
 if not defined MAINT_UNATTENDED set "MAINT_CHILD_PAUSES=1"
 echo Requesting administrative privileges...
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference = 'Stop'; $q = [char]34; $a = @('-NoProfile','-ExecutionPolicy','Bypass','-File',($q + $env:MAINT_PS1 + $q)); if ($env:MAINT_CHILD_PAUSES) { $a += '-PauseAtEnd' }; if ($env:MAINT_ARGS) { $a += $env:MAINT_ARGS }; try { $p = Start-Process -FilePath 'powershell.exe' -Verb RunAs -ArgumentList $a -Wait -PassThru } catch { Write-Host $_.Exception.Message; exit 1 }; if ($null -eq $p -or $null -eq $p.ExitCode) { exit 1 }; exit $p.ExitCode"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference = 'Stop'; $q = [char]34; $a = @('-NoProfile','-ExecutionPolicy','Bypass','-File',($q + $env:MAINT_PS1 + $q)); if ($env:MAINT_CHILD_PAUSES) { $a += '-PauseAtEnd' }; if ($env:WSL_MAINT_CONFIG) { $a += @('-MaintConfig', ($q + $env:WSL_MAINT_CONFIG + $q)) }; if ($env:MAINT_ARGS) { $a += $env:MAINT_ARGS }; try { $p = Start-Process -FilePath 'powershell.exe' -Verb RunAs -ArgumentList $a -Wait -PassThru } catch { Write-Host $_.Exception.Message; exit 1 }; if ($null -eq $p -or $null -eq $p.ExitCode) { exit 1 }; exit $p.ExitCode"
 set "MAINT_RC=%errorlevel%"
 goto maint_done
 
