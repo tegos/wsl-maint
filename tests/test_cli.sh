@@ -41,15 +41,23 @@ out=$("$MAINT" help 2>&1)
 assert_contains "$out" "audit" "help mentions audit"
 assert_contains "$out" "--dry-run" "help mentions --dry-run"
 
-assert_fails "$MAINT bogus >/dev/null 2>&1" "unknown subcommand fails"
-assert_fails "$MAINT clean --bogus-flag >/dev/null 2>&1" "unknown flag fails"
+rc=0; "$MAINT" bogus >/dev/null 2>&1 || rc=$?
+assert_eq "2" "$rc" "unknown subcommand exits 2"
+rc=0; "$MAINT" clean --bogus-flag >/dev/null 2>&1 || rc=$?
+assert_eq "2" "$rc" "unknown flag exits 2"
 
 out=$("$MAINT" audit --rules "$TMP/rules.conf" 2>&1)
 assert_contains "$out" "TOTAL" "audit runs"
 
-# dry-run changes nothing
+# dry-run changes nothing, and records no run: `--if-stale` after a dry run
+# must still clean (a look with --dry-run used to be able to suppress the
+# README's `@reboot maint clean --if-stale 7` for a week).
+rm -f "$STATE_FILE"
 "$MAINT" clean --dry-run --rules "$TMP/rules.conf" >/dev/null 2>&1
 assert_ok "[ -f \"$TMP/auto/x/blob\" ]" "dry-run leaves auto rule alone"
+assert_fails "grep -q '^lastrun.clean=' \"$STATE_FILE\" 2>/dev/null" "dry-run writes no lastrun.clean"
+out=$("$MAINT" clean --dry-run --if-stale 7 --rules "$TMP/rules.conf" 2>&1)
+assert_fails "printf '%s' \"\$out\" | grep -q 'not stale'" "--if-stale after only a dry run still runs"
 
 # real run applies auto rules only
 "$MAINT" clean --rules "$TMP/rules.conf" >/dev/null 2>&1
@@ -344,5 +352,33 @@ assert_fails "printf '%s' \"\$out\" | grep -q '$CV'" "plain clean leaves the cla
 rc=0; out=$(HOME="$TMP/cvhome" "$MAINT" clean --dry-run --sessions 2>&1) || rc=$?
 assert_eq "0" "$rc" "clean --dry-run --sessions exits 0"
 assert_contains "$out" "DRY $CV/1.0.0" "clean --sessions still prunes old claude versions"
+
+
+# --- exit code is the contract between the halves (docs/how-it-works.md) ---
+# Usage errors exit 2, not just "non-zero"; Invoke-Wsl throws on any non-zero
+# so a 1 would still throw, but README documents 2 for usage/config errors.
+# A failed clean exits 1 and does not write lastrun.clean, so --if-stale does
+# not count it as a run. The rule's target is the fixture HOME, an ancestor of
+# $HOME/.ssh, which is_protected refuses.
+mkdir -p "$HOME/.ssh" "$HOME/junk"
+head -c 2048 /dev/zero > "$HOME/junk/blob"
+printf '%s purge - yes\n' "$HOME" > "$TMP/refused.rules"
+rm -f "$STATE_FILE"
+rc=0; err=$("$MAINT" clean --rules "$TMP/refused.rules" 2>&1 1>/dev/null) || rc=$?
+assert_eq "1" "$rc" "a refused clean exits 1 through the CLI"
+assert_contains "$err" "rule(s) failed" "a refused clean reports the failure"
+assert_fails "grep -q '^lastrun.clean=' \"$STATE_FILE\" 2>/dev/null" "a failed clean writes no lastrun.clean"
+out=$("$MAINT" clean --if-stale 7 --rules "$TMP/refused.rules" 2>&1) || true
+assert_fails "printf '%s' \"\$out\" | grep -q 'not stale'" "a failed clean does not satisfy --if-stale"
+
+# A dead docker client: exit 1, no lastrun.docker. The shim fails `docker info`.
+mkdir -p "$TMP/deadbin"
+printf '#!/bin/sh\nexit 1\n' > "$TMP/deadbin/docker"
+chmod +x "$TMP/deadbin/docker"
+rm -f "$STATE_FILE"
+rc=0; err=$(PATH="$TMP/deadbin:$PATH" DOCKER_CANDIDATES=docker "$MAINT" docker --yes < /dev/null 2>&1 1>/dev/null) || rc=$?
+assert_eq "1" "$rc" "an unreachable docker exits 1 through the CLI"
+assert_contains "$err" "docker not reachable" "an unreachable docker is named through the CLI"
+assert_fails "grep -q '^lastrun.docker=' \"$STATE_FILE\" 2>/dev/null" "a failed docker prune writes no lastrun.docker"
 
 echo "RESULT $ASSERT_PASS $ASSERT_FAIL"

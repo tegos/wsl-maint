@@ -435,6 +435,7 @@ printf "${V1}\nmyapp_db\napp_mysql_data\n" > "$FAKE_DOCKER_DANGLING_FILE"
 rc=0
 cli_out=$(STATE_FILE="$TMP/state" ../wsl/maint docker --dry-run --config "$TMP/empty.conf" 2>&1) || rc=$?
 assert_eq "0" "$rc" "maint docker --dry-run exits 0"
+assert_fails "grep -q '^lastrun.docker=' \"$TMP/state\" 2>/dev/null" "maint docker --dry-run writes no lastrun.docker"
 assert_contains "$cli_out" "kept named volume: myapp_db" "maint docker --dry-run lists a named volume as kept"
 assert_contains "$cli_out" "kept named volume: app_mysql_data" "maint docker --dry-run lists app_mysql_data as kept"
 assert_contains "$cli_out" "  ${V1}" "maint docker --dry-run lists the anonymous volume to prune"
