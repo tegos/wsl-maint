@@ -54,8 +54,8 @@ case "$1 $2 ${3:-}" in
   "system df -v")
     echo '{"Images":[{"Repository":"mysql","Tag":"8","UniqueSize":"1.12GB","Containers":"0"},{"Repository":"alpine","Tag":"latest","UniqueSize":"88.02kB","Containers":"0"}],"Volumes":[{"Name":"small-vol","Size":"207.8MB","Links":"0"},{"Name":"big-db-data","Size":"16.86GB","Links":"1"}],"Containers":[],"BuildCache":[]}'
     ;;
-  "system df --format") printf '7.334GB\n0B\n21.86GB\n0B\n' ;;
-  "system df ") echo "TYPE  TOTAL" ;;
+  "system df --format") printf '7.334GB\n0B\n21.86GB\n0B\n'; exit "${DFF_RC:-0}" ;;
+  "system df ") echo "TYPE  TOTAL"; exit "${DF_RC:-0}" ;;
   *) exit 1 ;;
 esac
 SHIM
@@ -85,6 +85,24 @@ assert_eq "0" "$rc" "maint space exits 0"
 assert_contains "$out" "compact could return" "report has the vhdx section"
 assert_contains "$out" "big-db-data" "report reaches the docker section"
 assert_contains "$out" "Alpine " "vhdx line labelled with the running distro, not Ubuntu"
+
+# Regression: `docker info` answers but `system df` fails or outlives its
+# timeout (exit 124). Both calls were bare under maint's set -e: the first
+# killed the report before a line was printed, with no message, exit 124;
+# the second ended it after the "== docker by type" header.
+for rcs in "124 0" "1 0" "0 124" "124 124"; do
+  rc=0
+  out=$(DFF_RC="${rcs% *}" DF_RC="${rcs#* }" ../wsl/maint space 2>&1) || rc=$?
+  assert_eq "0" "$rc" "maint space exits 0 when system df fails ($rcs)"
+  assert_contains "$out" "compact could return" "vhdx section survives a failed df ($rcs)"
+  assert_contains "$out" "big-db-data" "volumes table survives a failed df ($rcs)"
+done
+rc=0
+out=$(DFF_RC=124 ../wsl/maint space 2>&1) || rc=$?
+assert_contains "$out" "used: unknown" "a failed docker total reads as unknown"
+rc=0
+out=$(DF_RC=124 ../wsl/maint space 2>&1) || rc=$?
+assert_contains "$out" "per-type totals skipped" "a failed per-type df is warned about"
 unset SPACE_DISTRO_VHDX_GLOB SPACE_REG WSL_DISTRO_NAME
 
 # --- distro disk from the Lxss registry (reg.exe stubbed, never the real one) ---

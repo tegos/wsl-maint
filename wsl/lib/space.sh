@@ -184,7 +184,10 @@ space_docker() {
   fi
 
   echo "== docker by type"
-  timeout 60 "$d" system df 2>/dev/null | tr -d '\r'
+  # `|| log_warn`, not bare: under maint's set -e a failed or timed-out df
+  # ended the report here, after the header.
+  timeout 60 "$d" system df 2>/dev/null | tr -d '\r' \
+    || log_warn "docker system df failed; per-type totals skipped"
 
   echo "== docker volumes (links = containers using it)"
   jq -r '.Volumes[] | [.Size, .Links, .Name] | @tsv' <<< "$json" \
@@ -205,8 +208,14 @@ space_run() {
   d=$(docker_cmd) || d=""
   if [ -n "$d" ]; then
     # Sum of the four per-type sizes: what the engine actually holds.
+    # `|| docker_used=""`: docker_cmd only proved that `info` answers. A
+    # `system df` that fails or outlives its 60 s (it sizes every layer) used
+    # to hit maint's set -e in this bare assignment, before a line of the
+    # report was printed and with stderr discarded: no output, exit 124.
+    # Unknown is what space_vhdx_line already renders as "used: unknown".
     docker_used=$(timeout 60 "$d" system df --format '{{.Size}}' 2>/dev/null | tr -d '\r' \
-      | while read -r s; do docker_bytes "$s"; done | awk '{t += $1} END {printf "%.0f\n", t}')
+      | while read -r s; do docker_bytes "$s"; done | awk '{t += $1} END {printf "%.0f\n", t}') \
+      || docker_used=""
   fi
 
   echo "== vhdx files (file size vs data inside)"
@@ -221,7 +230,9 @@ space_run() {
   echo
 
   if [ -n "$d" ]; then
-    space_docker "$d"
+    # A degraded daemon has already been warned about inside space_docker; it
+    # must not fail the read-only report when an absent one does not.
+    space_docker "$d" || true
   else
     log_warn "docker not reachable (tried: $DOCKER_CANDIDATES); skipping docker breakdown"
   fi
