@@ -216,16 +216,20 @@ config_defaults; rm -rf "$TMPC"
 
 # Named dangling volumes are kept by default, guard or not: a Compose
 # `mysql_data:` volume is `<project>_mysql_data`, dangling after
-# `docker compose down`. Only the anonymous (64-hex) one is pruned.
-printf "${V1}\napp_mysql_data\nmyapp_esdata\nminio\n" > "$FAKE_DOCKER_DANGLING_FILE"
+# `docker compose down`. Only the anonymous (exactly 64 lowercase hex) one is
+# pruned: short all-hex names, a 63- or 65-digit one and uppercase hex are
+# somebody's names, and a loosened DOCKER_ANON_RE used to pass this file.
+HEX63=$(printf 'a%.0s' {1..63}); HEX65=$(printf 'a%.0s' {1..65}); HEX64U=$(printf 'A%.0s' {1..64})
+printf "${V1}\napp_mysql_data\nmyapp_esdata\nminio\ncafe\n2024\n${HEX63}\n${HEX65}\n${HEX64U}\n" > "$FAKE_DOCKER_DANGLING_FILE"
 : > "$FAKE_DOCKER_CALLS"; rm -f "$FAKE_DOCKER_PRUNED_MARK"
 out=$(docker_prune 2>"$TMP/named.err")
 rc=$?
 assert_ok "grep -qx 'volume rm ${V1}' \"$FAKE_DOCKER_CALLS\"" "default: only the anonymous volume reaches volume rm"
 assert_contains "$out" "PRUNED 1 dangling volume" "default: the count covers the anonymous volume only"
-for name in app_mysql_data myapp_esdata minio; do
+for name in app_mysql_data myapp_esdata minio cafe 2024 "$HEX63" "$HEX65" "$HEX64U"; do
   assert_contains "$(cat "$TMP/named.err")" "kept named volume: $name" "default: $name is kept and reported as named"
 done
+assert_eq "1" "$(grep -c '^volume rm' "$FAKE_DOCKER_CALLS")" "default: exactly one volume rm call"
 # maint.bat users have no --named-volumes flag: the config key must be named.
 assert_contains "$(cat "$TMP/named.err")" "--named-volumes" "the kept message names the CLI opt-in"
 assert_contains "$(cat "$TMP/named.err")" "docker_named_volumes = yes in maint.conf" "the kept message names the config opt-in"
