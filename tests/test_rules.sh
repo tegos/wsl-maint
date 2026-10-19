@@ -107,12 +107,58 @@ done
 # user-supplied EasyOCR models, the Hugging Face token, pinned puppeteer
 # browsers, an owner-only tool's cache. They must need --sessions. The
 # Playwright cache joins them: a project outside the scan roots looks unpinned.
-assert_ok "rules_parse ../rules.conf >/dev/null 2>&1" "shipped rules.conf parses cleanly"
-shipped=$(rules_parse ../rules.conf)
-for p in ~/.cache/ms-playwright ~/.cache/ms-playwright-mcp ~/.EasyOCR ~/.cache/huggingface ~/.cache/puppeteer ~/.cache/wayback-video; do
-  row=$(echo "$shipped" | grep -F "$p|" | head -1)
-  assert_eq "no" "${row##*|}" "shipped rules.conf: $p is auto=no"
+# Under a fixture HOME: on the real one a cache dir that is a symlink would
+# be resolved to its target and the rows below would not match by name.
+SHIPPED_HOME="$TMP/shipped-home"; mkdir -p "$SHIPPED_HOME"
+assert_ok "HOME=\"$SHIPPED_HOME\" rules_parse ../rules.conf >/dev/null 2>&1" "shipped rules.conf parses cleanly"
+shipped=$(HOME="$SHIPPED_HOME" rules_parse ../rules.conf)
+for p in .cache/ms-playwright .cache/ms-playwright-mcp .EasyOCR .cache/huggingface .cache/puppeteer .cache/wayback-video; do
+  row=$(echo "$shipped" | grep -F "$SHIPPED_HOME/$p|" | head -1)
+  assert_eq "no" "${row##*|}" "shipped rules.conf: ~/$p is auto=no"
 done
+
+# --- a rule root that is a symlink ---
+# Regression: `[ -d ]` follows the link so the rule was accepted, but `find`
+# (-P) does not descend a command-line symlink: purge/age/keep-newest listed
+# nothing, clean printed "freed: 0.0", exit 0, and recorded a run. The root
+# is now resolved once, so the walk and the guard see the real directory.
+mkdir -p "$TMP/lnk-real/a" "$TMP/lnk-real/b"
+head -c 4096 /dev/zero > "$TMP/lnk-real/a/blob"
+ln -s "$TMP/lnk-real" "$TMP/lnk-root"
+printf '%s purge - yes\n' "$TMP/lnk-root" > "$TMP/lnk.conf"
+assert_eq "$TMP/lnk-real|purge|-|yes" "$(rules_parse "$TMP/lnk.conf" 2>/dev/null)" \
+  "a symlinked root is resolved to its target"
+assert_contains "$(rules_parse "$TMP/lnk.conf" 2>&1 >/dev/null)" "is a symlink; using $TMP/lnk-real" \
+  "a resolved root is announced"
+assert_eq "2" "$(rule_targets "$TMP/lnk-real" purge - | wc -l)" "the resolved root is walked"
+# Regression: a trailing "/" or "/." made find resolve the link while the
+# targets kept the link's spelling (root//name), which the lexical guard then
+# let through: `~/.cache/lnk/ purge` with lnk -> ~/.ssh deleted id_rsa.
+mkdir -p "$TMP/lnk-prot"; head -c 2048 /dev/zero > "$TMP/lnk-prot/id_rsa"
+ln -s "$TMP/lnk-prot" "$TMP/lnk-to-prot"
+REAL_PATTERNS=("${PROTECTED_PATTERNS[@]}")
+PROTECTED_PATTERNS+=("$TMP/lnk-prot")
+for spelling in "$TMP/lnk-to-prot/" "$TMP/lnk-to-prot/."; do
+  printf '%s purge - yes\n' "$spelling" > "$TMP/lnk2.conf"
+  assert_eq "$TMP/lnk-prot|purge|-|yes" "$(rules_parse "$TMP/lnk2.conf" 2>/dev/null)" \
+    "a symlinked root with a trailing slash resolves to its target: $spelling"
+  DRY_RUN=1
+  out=$(rule_run "$TMP/lnk-prot" purge - 2>"$TMP/lnk2.err"); rc=$?
+  assert_eq "1" "$rc" "the resolved protected target fails the rule: $spelling"
+  assert_contains "$(cat "$TMP/lnk2.err")" "refusing to delete protected path" "the guard sees the real path: $spelling"
+  assert_fails "printf '%s' \"\$out\" | grep -q '^ *DRY'" "nothing under the protected target is announced: $spelling"
+done
+assert_ok "[ -f \"$TMP/lnk-prot/id_rsa\" ]" "the protected file survived"
+# A protected name that is itself a symlink elsewhere stays protected by its
+# spelling: resolving it would have made ~/.config deletable through the link.
+mkdir -p "$TMP/lnk-elsewhere"; touch "$TMP/lnk-elsewhere/secret"
+ln -s "$TMP/lnk-elsewhere" "$TMP/lnk-named-prot"
+PROTECTED_PATTERNS+=("$TMP/lnk-named-prot")
+printf '%s purge - yes\n' "$TMP/lnk-named-prot" > "$TMP/lnk3.conf"
+assert_fails "rules_parse \"$TMP/lnk3.conf\" >/dev/null 2>&1" "a protected symlinked root is refused at parse"
+assert_contains "$(rules_parse "$TMP/lnk3.conf" 2>&1 >/dev/null)" "rule path is protected" "the refusal names the reason"
+PROTECTED_PATTERNS=("${REAL_PATTERNS[@]}")
+# A symlink inside a rule root is still removed as a link, never followed.
 
 # --- keep-newest ---
 mkdir -p "$TMP/kn"

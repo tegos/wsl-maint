@@ -43,7 +43,7 @@ _rule_arg_ok() {
 # split such a path into fragments and bind the wrong columns, then drop the
 # line without a word.
 rules_parse() {
-  local file="$1" line path policy arg auto rc=0 n=0
+  local file="$1" line path policy arg auto real rc=0 n=0
   [ -f "$file" ] || { log_err "rules file not found: $file"; return 1; }
   # `|| [ -n "$line" ]` so a last line with no trailing newline is still read.
   while IFS= read -r line || [ -n "$line" ]; do
@@ -73,6 +73,27 @@ rules_parse() {
     case "$path" in
       *"|"*) log_err "rule path may not contain '|': $path"; rc=1; continue ;;
     esac
+    # Normalised the way safe_rm normalises every target (lexical_path). A
+    # trailing "/" or "/." made find resolve a symlinked root while the
+    # targets kept the link's spelling (~/.cache/lnk//id_rsa for a lnk that
+    # points at ~/.ssh), which the lexical guard then judged as deletable.
+    path=$(lexical_path "$path")
+    if [ -L "$path" ]; then
+      # A root that is itself a symlink is walked nowhere by `find` (-P, the
+      # default): purge, age and keep-newest listed nothing, clean reported
+      # success and recorded a run, audit showed the link's byte length.
+      # Resolved once so the walk and the guard both see the real directory.
+      # The spelled root is judged first: ~/.config pointing at another disk
+      # must stay protected by its name, not become deletable through it.
+      if is_protected "$path"; then
+        log_err "rule path is protected: $path"; rc=1; continue
+      fi
+      if ! real=$(readlink -f -- "$path") || [ -z "$real" ]; then
+        log_err "cannot resolve symlinked rule path: $path"; rc=1; continue
+      fi
+      log_info "rule path $path is a symlink; using $real"
+      path="$real"
+    fi
     case " $KNOWN_POLICIES " in
       *" $policy "*) ;;
       *) log_err "unknown policy: $policy"; rc=1; continue ;;

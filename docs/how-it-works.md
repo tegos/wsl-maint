@@ -101,6 +101,10 @@ Design points worth copying:
 - `clean` applies only `auto=yes` rules; `auto=no` rules run only with `--sessions`.
 - `#` starts a comment anywhere on a line, and `|` is refused, so neither can appear in
   a path.
+- A rule path that is itself a symlink is resolved to its target once, before the walk
+  (`find` would otherwise not descend it and the rule would silently free nothing), so the
+  guard judges the real directory. A protected name that is a symlink (`~/.config` pointing
+  at another disk) is refused by its name instead.
 
 ### Deletion guard
 
