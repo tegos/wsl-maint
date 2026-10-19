@@ -13,6 +13,30 @@
 # Files in use are skipped by -ErrorAction SilentlyContinue, matching the
 # behaviour of the del /q /f /s the old batch file used.
 
+function Remove-TempEntry {
+    # Windows PowerShell 5.1's Remove-Item -Recurse walks INTO a junction or
+    # directory symlink and deletes the TARGET's contents (fixed in PowerShell
+    # 6, never in 5.1), so a junction an installer left in %TEMP% pointing at
+    # a project turned "clear temp" into emptying that project, silently. A
+    # reparse point is removed as a link only: .Delete() is RemoveDirectory /
+    # DeleteFile, which never follow one. -Recurse is never used; directories
+    # are walked here one entry at a time, so a link nested deeper is caught
+    # too, and a directory that still holds something (a locked file) is left
+    # for the re-count below to report.
+    param([Parameter(Mandatory)]$Item)
+    if (($Item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+        try { $Item.Delete() } catch { }
+        return
+    }
+    if ($Item.PSIsContainer) {
+        foreach ($child in @(Get-ChildItem -LiteralPath $Item.FullName -Force -ErrorAction SilentlyContinue)) {
+            Remove-TempEntry $child
+        }
+        if (@(Get-ChildItem -LiteralPath $Item.FullName -Force -ErrorAction SilentlyContinue).Count -gt 0) { return }
+    }
+    Remove-Item -LiteralPath $Item.FullName -Force -ErrorAction SilentlyContinue
+}
+
 function Invoke-MaintWinClean {
     param([switch]$DryRun)
 
@@ -33,9 +57,7 @@ function Invoke-MaintWinClean {
             Write-MaintLog -Message "DRY would clear $t"
             continue
         }
-        $items | ForEach-Object {
-            Remove-Item -LiteralPath $_.FullName -Recurse -Force -ErrorAction SilentlyContinue
-        }
+        $items | ForEach-Object { Remove-TempEntry $_ }
         # -ErrorAction SilentlyContinue above means a locked file does not
         # throw and does not abort the loop (matching del /q /f /s), but that
         # also means a failure is otherwise invisible. Re-count afterwards so
