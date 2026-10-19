@@ -14,8 +14,9 @@ distro, prunes the Docker build cache and dangling volumes, exports the distro t
 (`docker_data.vhdx`) with `Optimize-VHD`.
 
 Looking is safe: `maint audit` and every `--dry-run` / `-DryRun` delete nothing. Read up
-before running `full` and `compact` (they shut WSL down) and `maint docker --named-volumes`
-(it can remove named volumes, see [Safety](#safety)).
+before running `backup` (its export stops the distro: every shell and process inside it
+dies), `full` and `compact` (they shut WSL down) and `maint docker --named-volumes` (it can
+remove named volumes, see [Safety](#safety)).
 
 Two halves share one config file. The Windows half (`maint.bat` around `maint.ps1`) does
 whatever stops the VM or needs admin: backup, compact, Defender exclusions, `%TEMP%`
@@ -67,8 +68,9 @@ backup verification. Why the split: [docs/how-it-works.md](docs/how-it-works.md)
    On Windows, from an elevated cmd: `maint.bat backup -DryRun` (needs `backup_root` and
    40 GB free there).
 
-5. Take a first backup before anything is deleted. `backup` normally cleans first;
-   `-NoClean` exports the distro as it is:
+5. Take a first backup before anything is deleted. Close anything running inside the
+   distro first: the export stops it. `backup` normally cleans first; `-NoClean` exports
+   the distro as it is:
 
    ```bat
    maint.bat backup -NoClean
@@ -198,8 +200,8 @@ daytime slot with `@reboot ... --if-stale`:
 0 13 * * 0   $HOME/.local/bin/maint docker
 ```
 
-Without a terminal and `--yes`, `maint docker` keeps the volumes. Keep `full` manual: it
-shuts WSL down.
+Without a terminal and `--yes`, `maint docker` keeps the volumes. Keep `backup` and `full`
+manual: they stop the distro, and `full` shuts WSL down.
 
 ## Tests
 
