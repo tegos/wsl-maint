@@ -254,4 +254,19 @@ for a in "" " " n N no nope yeah sure 1 "y y" yess; do
 done
 assert_fails "is_consent" "is_consent refuses a missing answer"
 
+
+# --- the protected list survives a non-canonical HOME ---
+# Regression: the patterns were built from the raw $HOME while only the
+# target was normalised, so HOME=/home/u/ gave `/home/u//.ssh` and
+# `~/.ssh purge` was allowed through. Re-sourced in a subshell so the odd
+# HOME never leaks into the rest of this file.
+mkdir -p "$TMP/hs/.ssh"
+for h in "$TMP/hs/" "$TMP//hs" "$TMP/hs/."; do
+  assert_ok "HOME=\"$h\" bash -c 'source ../wsl/lib/common.sh; is_protected \"\$HOME/.ssh/id_rsa\"'" \
+    "~/.ssh is protected with HOME=$h"
+  assert_ok "HOME=\"$h\" bash -c 'source ../wsl/lib/common.sh; is_protected \"\$HOME/.config/x\"'" \
+    "~/.config is protected with HOME=$h"
+done
+assert_ok "HOME=/ bash -c 'source ../wsl/lib/common.sh; is_protected /.ssh/id_rsa'" "HOME=/ protects /.ssh"
+
 echo "RESULT $ASSERT_PASS $ASSERT_FAIL"

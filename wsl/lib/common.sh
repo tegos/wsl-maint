@@ -36,33 +36,6 @@ dir_bytes() {
   esac
 }
 
-# Paths that must never be deleted, regardless of rules.conf.
-# Matched as the path itself or any path beneath it.
-# Only the test suite may modify this array (it appends sandbox paths). Production
-# code must never add, drop or reorder entries: the guard would keep reporting
-# success over a shrunken list. Not `readonly` because the tests need to append.
-PROTECTED_PATTERNS=(
-  "$HOME/.ssh"
-  "$HOME/.gnupg"
-  "$HOME/.config"
-  "$HOME/.claude/projects/*/memory"
-  # The author's own code and project dirs. Not part of the design: on another
-  # box they usually do not exist and protect nothing, which is harmless.
-  "$HOME/scripts"
-  "$HOME/work"
-  "$HOME/tools"
-  # Windows drives (/mnt/c, /mnt/d, ...) are NOT listed here: a glob entry
-  # would be expanded by is_protected's ancestor loop, a readdir of /mnt on
-  # every call. is_protected checks them with a `case` instead.
-  "/etc"
-  # "/" is deliberately NOT listed: `${p%/}` would reduce it to the empty
-  # string and it would be skipped by the `[ -n "$p" ]` guard below anyway.
-  # "/" is refused by the empty-target guard in is_protected instead. Making a
-  # "/" prefix rule actually work here would be wrong, not just redundant: it
-  # would match every path on the system and make rules.conf's
-  # /var/log/journal row (and every other absolute-path rule) undeletable.
-)
-
 # Lexical path normalization: collapses repeated slashes, drops "." and
 # resolves ".." against the preceding segment. Deliberately not `realpath`,
 # which would follow symlinks and change what the guard below means.
@@ -92,6 +65,42 @@ lexical_path() {
     echo "${out#/}"
   fi
 }
+
+# $HOME as the guard compares it: lexical_path is applied to every
+# TARGET, so the patterns must be built from the same shape. A raw HOME with
+# a trailing slash (`/home/u/`, straight from /etc/passwd or an exported
+# launcher value), `//` or `/.` gave patterns like `/home/u//.ssh` that no
+# normalised target ever matched, and ~/.ssh, ~/.gnupg, ~/.config and the
+# memory dirs were silently unprotected.
+_MAINT_HOME=$(lexical_path "$HOME")
+_MAINT_HOME="${_MAINT_HOME%/}"
+
+# Paths that must never be deleted, regardless of rules.conf.
+# Matched as the path itself or any path beneath it.
+# Only the test suite may modify this array (it appends sandbox paths). Production
+# code must never add, drop or reorder entries: the guard would keep reporting
+# success over a shrunken list. Not `readonly` because the tests need to append.
+PROTECTED_PATTERNS=(
+  "$_MAINT_HOME/.ssh"
+  "$_MAINT_HOME/.gnupg"
+  "$_MAINT_HOME/.config"
+  "$_MAINT_HOME/.claude/projects/*/memory"
+  # The author's own code and project dirs. Not part of the design: on another
+  # box they usually do not exist and protect nothing, which is harmless.
+  "$_MAINT_HOME/scripts"
+  "$_MAINT_HOME/work"
+  "$_MAINT_HOME/tools"
+  # Windows drives (/mnt/c, /mnt/d, ...) are NOT listed here: a glob entry
+  # would be expanded by is_protected's ancestor loop, a readdir of /mnt on
+  # every call. is_protected checks them with a `case` instead.
+  "/etc"
+  # "/" is deliberately NOT listed: `${p%/}` would reduce it to the empty
+  # string and it would be skipped by the `[ -n "$p" ]` guard below anyway.
+  # "/" is refused by the empty-target guard in is_protected instead. Making a
+  # "/" prefix rule actually work here would be wrong, not just redundant: it
+  # would match every path on the system and make rules.conf's
+  # /var/log/journal row (and every other absolute-path rule) undeletable.
+)
 
 is_protected() {
   # Normalized first: `//` and `$HOME/../<user>/.ssh` must not walk around

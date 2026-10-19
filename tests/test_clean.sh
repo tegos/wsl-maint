@@ -77,7 +77,7 @@ assert_eq "freed: 1.0M" "$(freed_line "$out")" \
 assert_ok "[ -d \"$TMP/pr/b\" ]" "protected target survived"
 assert_fails "[ -d \"$TMP/pr/a\" ]" "unprotected target removed"
 PROTECTED_PATTERNS=("${REAL_PATTERNS[@]}")
-assert_contains "${PROTECTED_PATTERNS[*]}" "$HOME/.ssh" "real protected list restored after the pr fixture"
+assert_contains "${PROTECTED_PATTERNS[*]}" "$_MAINT_HOME/.ssh" "real protected list restored after the pr fixture"
 
 # Positive control: nothing refused, so the whole estimate is reclaimed.
 mkdir -p "$TMP/ok/a" "$TMP/ok/b"
@@ -156,7 +156,7 @@ rc=$?
 assert_eq "1" "$rc" "a refused target makes clean_run exit non-zero"
 assert_eq "freed: 1.0M" "$(freed_line "$out")" "the freed summary is still printed on failure"
 PROTECTED_PATTERNS=("${REAL_PATTERNS[@]}")
-assert_contains "${PROTECTED_PATTERNS[*]}" "$HOME/.ssh" "real protected list restored after the fail fixture"
+assert_contains "${PROTECTED_PATTERNS[*]}" "$_MAINT_HOME/.ssh" "real protected list restored after the fail fixture"
 
 # Positive control: the same shape with nothing refused exits 0.
 mkdir -p "$TMP/pass/a"
