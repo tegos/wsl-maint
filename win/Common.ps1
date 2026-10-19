@@ -220,9 +220,24 @@ function Assert-Admin {
 function Invoke-Wsl {
     param([Parameter(Mandatory)][string[]]$Arguments)
     Write-MaintLog -Message ("wsl " + ($Arguments -join ' '))
-    & wsl.exe @Arguments
-    if ($LASTEXITCODE -ne 0) {
-        throw ("wsl exited " + $LASTEXITCODE + ": wsl " + ($Arguments -join ' '))
+    # 'Continue' for just the native call (pitfall 3 in docs/how-it-works.md).
+    # Under 'Stop', PS 5.1 turns a wsl.exe stderr line into a terminating
+    # NativeCommandError whenever it redirects the child's stderr: with 2>&1,
+    # and also when powershell.exe's own stderr is a file or pipe (an elevated
+    # prompt or task running `maint.bat full -Unattended > log 2>&1`).
+    # wsl/maint logs every [info] line to stderr, so the proxy verbs and
+    # backup's clean step threw on the first line of a successful run there.
+    # The exit code decides, as it always did; output still flows through.
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        & wsl.exe @Arguments
+        $code = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $prevEap
+    }
+    if ($code -ne 0) {
+        throw ("wsl exited " + $code + ": wsl " + ($Arguments -join ' '))
     }
 }
 
