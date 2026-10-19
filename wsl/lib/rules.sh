@@ -78,21 +78,28 @@ rules_parse() {
     # targets kept the link's spelling (~/.cache/lnk//id_rsa for a lnk that
     # points at ~/.ssh), which the lexical guard then judged as deletable.
     path=$(lexical_path "$path")
-    if [ -L "$path" ]; then
-      # A root that is itself a symlink is walked nowhere by `find` (-P, the
-      # default): purge, age and keep-newest listed nothing, clean reported
-      # success and recorded a run, audit showed the link's byte length.
-      # Resolved once so the walk and the guard both see the real directory.
-      # The spelled root is judged first: ~/.config pointing at another disk
-      # must stay protected by its name, not become deletable through it.
-      if is_protected "$path"; then
-        log_err "rule path is protected: $path"; rc=1; continue
-      fi
+    # Resolved whole, not only when the last segment is a link: a symlink
+    # higher up (`~/.cache/lnk/sub` with lnk -> ~/.ssh) left the root
+    # unresolved, find walked through it, and every target kept the link's
+    # spelling, which the lexical guard judged deletable: ~/.ssh/sub/id went.
+    # A root that does not exist is left as written (rule_targets skips it).
+    if [ -e "$path" ] || [ -L "$path" ]; then
       if ! real=$(readlink -f -- "$path") || [ -z "$real" ]; then
         log_err "cannot resolve symlinked rule path: $path"; rc=1; continue
       fi
-      log_info "rule path $path is a symlink; using $real"
-      path="$real"
+      if [ "$real" != "$path" ]; then
+        # A root that is itself a symlink is walked nowhere by `find` (-P, the
+        # default): purge, age and keep-newest listed nothing, clean reported
+        # success and recorded a run, audit showed the link's byte length.
+        # Resolved once so the walk and the guard both see the real directory.
+        # The spelled root is judged first: ~/.config pointing at another disk
+        # must stay protected by its name, not become deletable through it.
+        if is_protected "$path"; then
+          log_err "rule path is protected: $path"; rc=1; continue
+        fi
+        log_info "rule path $path is a symlink; using $real"
+        path="$real"
+      fi
     fi
     case " $KNOWN_POLICIES " in
       *" $policy "*) ;;

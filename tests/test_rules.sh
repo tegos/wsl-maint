@@ -157,6 +157,23 @@ PROTECTED_PATTERNS+=("$TMP/lnk-named-prot")
 printf '%s purge - yes\n' "$TMP/lnk-named-prot" > "$TMP/lnk3.conf"
 assert_fails "rules_parse \"$TMP/lnk3.conf\" >/dev/null 2>&1" "a protected symlinked root is refused at parse"
 assert_contains "$(rules_parse "$TMP/lnk3.conf" 2>&1 >/dev/null)" "rule path is protected" "the refusal names the reason"
+# Regression: only the last segment was checked with `[ -L ]`, so a symlink
+# higher up (`~/.cache/lnk/sub` with lnk -> ~/.ssh) left the root unresolved
+# and the targets kept the link's spelling: ~/.ssh/sub/id was deleted.
+mkdir -p "$TMP/lnk-prot/sub"; head -c 2048 /dev/zero > "$TMP/lnk-prot/sub/id"
+printf '%s purge - yes\n' "$TMP/lnk-to-prot/sub" > "$TMP/lnk4.conf"
+assert_eq "$TMP/lnk-prot/sub|purge|-|yes" "$(rules_parse "$TMP/lnk4.conf" 2>/dev/null)" \
+  "a symlink above the rule root is resolved too"
+DRY_RUN=0
+out=$(rule_run "$TMP/lnk-prot/sub" purge - 2>"$TMP/lnk4.err"); rc=$?
+assert_eq "1" "$rc" "the protected target under a mid-path link fails the rule"
+assert_contains "$(cat "$TMP/lnk4.err")" "refusing to delete protected path" "the guard sees the real path"
+assert_ok "[ -f \"$TMP/lnk-prot/sub/id\" ]" "the file under the protected dir survived"
+DRY_RUN=1
+# A root that does not exist is left as written: rule_targets skips it.
+printf '%s purge - yes\n' "$TMP/no-such/dir" > "$TMP/lnk5.conf"
+assert_eq "$TMP/no-such/dir|purge|-|yes" "$(rules_parse "$TMP/lnk5.conf" 2>/dev/null)" \
+  "a missing root parses unchanged"
 PROTECTED_PATTERNS=("${REAL_PATTERNS[@]}")
 # A symlink inside a rule root is still removed as a link, never followed.
 

@@ -268,6 +268,15 @@ for h in "$TMP/hs/" "$TMP//hs" "$TMP/hs/."; do
     "~/.config is protected with HOME=$h"
 done
 assert_ok "HOME=/ bash -c 'source ../wsl/lib/common.sh; is_protected /.ssh/id_rsa'" "HOME=/ protects /.ssh"
+# A HOME behind a symlink: rules_parse resolves rule roots, so the targets
+# carry the resolved spelling and must still meet the protected entries.
+mkdir -p "$TMP/hreal/.ssh"; ln -s "$TMP/hreal" "$TMP/hlink"
+assert_ok "HOME=\"$TMP/hlink\" bash -c 'source ../wsl/lib/common.sh; is_protected \"$TMP/hreal/.ssh/id_rsa\"'" \
+  "~/.ssh is protected in its resolved spelling when HOME is a symlink"
+assert_ok "HOME=\"$TMP/hlink\" bash -c 'source ../wsl/lib/common.sh; is_protected \"\$HOME/.ssh/id_rsa\"'" \
+  "and still in HOME's own spelling"
+assert_fails "HOME=\"$TMP/hlink\" bash -c 'source ../wsl/lib/common.sh; is_protected \"$TMP/hreal/.cache/x\"'" \
+  "the resolved copies protect nothing extra"
 
 
 # --- safe_rm never deletes through a mount point ---

@@ -83,7 +83,8 @@ _MAINT_HOME="${_MAINT_HOME%/}"
 # Paths that must never be deleted, regardless of rules.conf.
 # Matched as the path itself or any path beneath it.
 # Only the test suite may modify this array (it appends sandbox paths). Production
-# code must never add, drop or reorder entries: the guard would keep reporting
+# code must never add, drop or reorder entries after load (the resolved-HOME
+# copies below are built once, at source time): the guard would keep reporting
 # success over a shrunken list. Not `readonly` because the tests need to append.
 PROTECTED_PATTERNS=(
   "$_MAINT_HOME/.ssh"
@@ -106,6 +107,21 @@ PROTECTED_PATTERNS=(
   # would match every path on the system and make rules.conf's
   # /var/log/journal row (and every other absolute-path rule) undeletable.
 )
+
+# rules_parse resolves a rule root through its symlinks, so with a HOME that
+# itself sits behind one (/home -> /data/home) the targets carry the resolved
+# spelling, which the entries above never match. The HOME-based entries are
+# repeated in that spelling once, here at load time.
+_MAINT_HOME_REAL=$(readlink -f -- "$_MAINT_HOME" 2>/dev/null) || _MAINT_HOME_REAL=""
+if [ -n "$_MAINT_HOME" ] && [ -n "$_MAINT_HOME_REAL" ] && [ "$_MAINT_HOME_REAL" != / ] \
+  && [ "$_MAINT_HOME_REAL" != "$_MAINT_HOME" ]; then
+  for _maint_p in "${PROTECTED_PATTERNS[@]}"; do
+    case "$_maint_p" in
+      "$_MAINT_HOME"/*) PROTECTED_PATTERNS+=("$_MAINT_HOME_REAL${_maint_p#"$_MAINT_HOME"}") ;;
+    esac
+  done
+  unset _maint_p
+fi
 
 is_protected() {
   # Normalized first: `//` and `$HOME/../<user>/.ssh` must not walk around
