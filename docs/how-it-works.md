@@ -129,6 +129,13 @@ The guard checks every target, not the rule root. `~ purge` would delete everyth
 on the list: the list protects only what it names. `/` is refused by a separate
 empty-target guard, and relative targets are refused too.
 
+`safe_rm` also never deletes through a mount: a target that is itself a mount point is
+refused (dry run included), and a mount nested deeper inside a target is skipped
+(`rm --one-file-system`), which fails that rule and reports the leftover. Without this,
+a Windows drive mounted under a cache directory had no `/mnt/` in its name for the
+lexical guard to see, and `du -x` had counted none of it in the estimate. A bind mount on
+the same device is not detected (the same limit as `age`'s `-xdev` walk).
+
 A target the guard refuses fails only that rule: the others still run, `clean` prints its
 `freed:` summary, then exits 1.
 

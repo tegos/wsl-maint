@@ -197,12 +197,34 @@ safe_rm() {
     return 1
   fi
   [ -e "$target" ] || return 0
+  # A target that is a mount point is never deleted, by any policy: `rm -rf`
+  # does not stop at a mount, so a drvfs or bind mount of a Windows drive
+  # under a cache dir was emptied through a target the lexical guard could
+  # not see (no /mnt/ in its name), while the estimate (`du -x`) had counted
+  # none of it. Only `age` guarded mounts, and only inside entries. Checked
+  # before the dry-run branch so a dry run shows the same refusal. lstat, so a
+  # symlink entry keeps its parent's device and is still removed as a link. A
+  # bind mount on the same device is not detected here (same limit as -xdev).
+  if [ -d "$target" ] && [ ! -L "$target" ]; then
+    local dev pdev
+    if ! dev=$(stat -c %d -- "$target") || ! pdev=$(stat -c %d -- "$(dirname -- "$target")"); then
+      log_err "cannot stat $target; not deleted"
+      return 1
+    fi
+    if [ "$dev" != "$pdev" ]; then
+      log_err "refusing to delete mount point: $target"
+      return 1
+    fi
+  fi
   if [ "$DRY_RUN" = "1" ]; then
     echo "DRY $target"
   else
     # Tested, not followed by a bare echo: the echo's status used to be the
     # function's, so a target rm only half deleted logged RM and returned 0.
-    if ! rm -rf -- "$target"; then
+    # --one-file-system: a mount nested deeper inside the target is skipped
+    # (rm then exits non-zero and the warning below reports the leftover)
+    # instead of being emptied.
+    if ! rm -rf --one-file-system -- "$target"; then
       log_warn "could not fully delete $target"
       return 1
     fi
