@@ -18,6 +18,8 @@ for fake in sudo journalctl; do
   printf '#!/bin/sh\necho "%s $*" >> "%s/calls"\nexit 0\n' "$fake" "$TMP" > "$TMP/bin/$fake"
   chmod +x "$TMP/bin/$fake"
 done
+# The sudo fake insists on -n, as the README's "skipped with a warning" does.
+printf '#!/bin/sh\necho "sudo $*" >> "%s/calls"\n[ "$1" = -n ] || { echo "sudo: a password is required" >&2; exit 1; }\nexit 0\n' "$TMP" > "$TMP/bin/sudo"
 export PATH="$TMP/bin:$PATH"
 
 # Hermetic config: the owner's checkout has a real maint.conf at the repo

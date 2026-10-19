@@ -429,8 +429,11 @@ assert_eq "434320180" "$vacuum_out" "a comma decimal separator reads as the same
 # that, so the vacuum was skipped on exactly the boxes that had been configured
 # properly for it. The only meaningful probe is the real command.
 narrow_sudo() {
-  # Emulates NOPASSWD for one command and nothing else.
-  [ "${1:-}" = "-n" ] && shift
+  # Emulates NOPASSWD for one command and nothing else. `-n` is part of the
+  # contract: without it a real sudo prompts at a terminal (an elevated
+  # maint.bat window) or errors out, never "skips with a warning".
+  [ "${1:-}" = "-n" ] || { echo "sudo: a password is required" >&2; return 1; }
+  shift
   if [ "${1:-}" = "journalctl" ] && [ "${2:-}" = "--vacuum-size=100M" ]; then
     return 0
   fi
