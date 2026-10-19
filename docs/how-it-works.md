@@ -101,6 +101,10 @@ Design points worth copying:
 - `clean` applies only `auto=yes` rules; `auto=no` rules run only with `--sessions`.
 - `#` starts a comment anywhere on a line, and `|` is refused, so neither can appear in
   a path.
+- A rule path that is itself a symlink is resolved to its target once, before the walk
+  (`find` would otherwise not descend it and the rule would silently free nothing), so the
+  guard judges the real directory. A protected name that is a symlink (`~/.config` pointing
+  at another disk) is refused by its name instead.
 
 ### Deletion guard
 
@@ -124,6 +128,13 @@ The guard rejects a path that:
 The guard checks every target, not the rule root. `~ purge` would delete everything not
 on the list: the list protects only what it names. `/` is refused by a separate
 empty-target guard, and relative targets are refused too.
+
+`safe_rm` also never deletes through a mount: a target that is itself a mount point is
+refused (dry run included), and a mount nested deeper inside a target is skipped
+(`rm --one-file-system`), which fails that rule and reports the leftover. Without this,
+a Windows drive mounted under a cache directory had no `/mnt/` in its name for the
+lexical guard to see, and `du -x` had counted none of it in the estimate. A bind mount on
+the same device is not detected (the same limit as `age`'s `-xdev` walk).
 
 A target the guard refuses fails only that rule: the others still run, `clean` prints its
 `freed:` summary, then exits 1.
@@ -224,7 +235,9 @@ would add the exclusions for real. The reverse holds too: every other verb refus
 
 `WSL_MAINT_CONFIG` set on Windows must name a file on a drive letter: the Windows side
 hands it to every `wsl/maint` call as `--config /mnt/<drive>/...`, so both halves read
-the same file and `docker_guard_extra` reaches the Docker prune. This, the `wsl/maint`
+the same file and `docker_guard_extra` reaches the Docker prune. `maint.bat` forwards it
+across the UAC relaunch (as the internal `-MaintConfig <path>`), since the elevated child
+does not inherit the caller's environment. This, the `wsl/maint`
 path and `backup_root` all assume drives mount at `/mnt/<letter>`; a different
 `[automount] root` in `/etc/wsl.conf` breaks the mapping.
 
@@ -306,7 +319,8 @@ sharing violation. No data is damaged; close Docker Desktop and retry.
 
 ### Other verbs
 
-- `winclean`: `%TEMP%` and the Recycle Bin, with free space on C: before and after.
+- `winclean`: `%TEMP%`, `%LOCALAPPDATA%\Temp` (deduplicated when they coincide) and the
+  Recycle Bin, with free space on C: before and after.
 - `defender`: adds Defender exclusions for the vhdx files and WSL/Docker processes
   (`wslservice.exe`, `com.docker.backend.exe` and others), which speeds up I/O
   noticeably. Processes are excluded by full image path, resolved at run time from
@@ -383,6 +397,7 @@ To adapt it, copy `maint.conf.example` to `maint.conf` (no code changes needed),
 `PROTECTED_PATTERNS` in `wsl/lib/common.sh` if your protected list differs, and put your
 own caches in `rules.conf` (start from `maint audit` or `du -xh -d2 ~ | sort -h`).
 
-Dependencies: inside WSL bash, coreutils, `jq`, `zstd`, `numfmt`. On Windows PowerShell
+Dependencies: inside WSL bash, GNU coreutils (`du -b`, `numfmt`, `tail -z`) and findutils
+(`find -printf`), `jq`, `zstd`. On Windows PowerShell
 5.1 and the Hyper-V module for `Optimize-VHD` (Pro/Enterprise only). On Home,
 `diskpart compact vdisk` might work, but that path is untested.

@@ -18,6 +18,8 @@ for fake in sudo journalctl; do
   printf '#!/bin/sh\necho "%s $*" >> "%s/calls"\nexit 0\n' "$fake" "$TMP" > "$TMP/bin/$fake"
   chmod +x "$TMP/bin/$fake"
 done
+# The sudo fake insists on -n, as the README's "skipped with a warning" does.
+printf '#!/bin/sh\necho "sudo $*" >> "%s/calls"\n[ "$1" = -n ] || { echo "sudo: a password is required" >&2; exit 1; }\nexit 0\n' "$TMP" > "$TMP/bin/sudo"
 export PATH="$TMP/bin:$PATH"
 
 # Hermetic config: the owner's checkout has a real maint.conf at the repo
@@ -39,15 +41,23 @@ out=$("$MAINT" help 2>&1)
 assert_contains "$out" "audit" "help mentions audit"
 assert_contains "$out" "--dry-run" "help mentions --dry-run"
 
-assert_fails "$MAINT bogus >/dev/null 2>&1" "unknown subcommand fails"
-assert_fails "$MAINT clean --bogus-flag >/dev/null 2>&1" "unknown flag fails"
+rc=0; "$MAINT" bogus >/dev/null 2>&1 || rc=$?
+assert_eq "2" "$rc" "unknown subcommand exits 2"
+rc=0; "$MAINT" clean --bogus-flag >/dev/null 2>&1 || rc=$?
+assert_eq "2" "$rc" "unknown flag exits 2"
 
 out=$("$MAINT" audit --rules "$TMP/rules.conf" 2>&1)
 assert_contains "$out" "TOTAL" "audit runs"
 
-# dry-run changes nothing
+# dry-run changes nothing, and records no run: `--if-stale` after a dry run
+# must still clean (a look with --dry-run used to be able to suppress the
+# README's `@reboot maint clean --if-stale 7` for a week).
+rm -f "$STATE_FILE"
 "$MAINT" clean --dry-run --rules "$TMP/rules.conf" >/dev/null 2>&1
 assert_ok "[ -f \"$TMP/auto/x/blob\" ]" "dry-run leaves auto rule alone"
+assert_fails "grep -q '^lastrun.clean=' \"$STATE_FILE\" 2>/dev/null" "dry-run writes no lastrun.clean"
+out=$("$MAINT" clean --dry-run --if-stale 7 --rules "$TMP/rules.conf" 2>&1)
+assert_fails "printf '%s' \"\$out\" | grep -q 'not stale'" "--if-stale after only a dry run still runs"
 
 # real run applies auto rules only
 "$MAINT" clean --rules "$TMP/rules.conf" >/dev/null 2>&1
@@ -80,9 +90,20 @@ assert_contains "$out" "not stale" "--if-stale 010 means 10 days, not octal 8"
 # `shift` failing there is an unshielded simple command, so under this
 # script's `set -e` the whole CLI died with exit 1 and no output at all
 # instead of reporting a usable error. It must now fail loudly.
-assert_fails "$MAINT clean --if-stale >/dev/null 2>&1" "--if-stale without a value fails"
-err=$("$MAINT" clean --if-stale 2>&1 1>/dev/null)
-assert_contains "$err" "--if-stale needs" "--if-stale without a value explains why"
+rc=0; err=$("$MAINT" clean --if-stale 2>&1 1>/dev/null) || rc=$?
+assert_eq "2" "$rc" "--if-stale without a value exits 2"
+assert_contains "$err" "[err ] --if-stale needs" "--if-stale without a value explains why"
+# Same for the other value-taking flags: `${2:?}` used to exit 1 with bash's
+# own "line N: 2:" message instead of the CLI's usage error.
+for flag in --rules --config; do
+  rc=0; err=$("$MAINT" audit $flag 2>&1 1>/dev/null) || rc=$?
+  assert_eq "2" "$rc" "$flag without a value exits 2"
+  assert_contains "$err" "[err ] $flag needs a path" "$flag without a value explains why"
+  rc=0; err=$("$MAINT" audit $flag "" 2>&1 1>/dev/null) || rc=$?
+  assert_eq "2" "$rc" "$flag with an empty value exits 2"
+done
+rc=0; err=$("$MAINT" clean --if-stale "" 2>&1 1>/dev/null) || rc=$?
+assert_eq "2" "$rc" "--if-stale with an empty value exits 2"
 
 # Regression: --if-stale with a non-numeric value used to reach
 # state_is_stale unvalidated, hit `$(( days * 86400 ))` in state.sh with a
@@ -232,6 +253,23 @@ printf '%s\n' 'backup_root = Q:\Backups\WSL' > "$TMP/verify-default.conf"
 MAINT_MNT_BASE="$TMP/mnt" "$MAINT" verify --config "$TMP/verify-default.conf" >/dev/null 2>&1
 assert_eq "zstd -t $BK/ubuntu_2026-02-01_0100.tar.zst" "$(cat "$TMP/zstd.calls")" "default distro Ubuntu verifies the newest archive in retention's name shape, not a newer look-alike"
 
+# Lowercasing is locale-independent: under tr_TR `${x,,}` maps I to dotless
+# ı, so I:\ became /mnt/ı and Ubuntu-IoT the prefix ubuntu-ıot_, which the
+# Windows side (ToLowerInvariant) never writes. Needs a generated locale;
+# skipped where localedef cannot make one.
+if mkdir -p "$TMP/loc" && localedef -i tr_TR -f UTF-8 "$TMP/loc/tr_TR.UTF-8" >/dev/null 2>&1; then
+  mkdir -p "$TMP/mnt/i/wsl"
+  printf 'x' > "$TMP/mnt/i/wsl/ubuntu-iot_2026-02-01_0100.tar.zst"
+  printf '%s\n' 'backup_root = I:\wsl' 'distro = Ubuntu-IoT' > "$TMP/verify-tr.conf"
+  : > "$TMP/zstd.calls"
+  rc=0
+  LOCPATH="$TMP/loc" LC_ALL=tr_TR.UTF-8 MAINT_MNT_BASE="$TMP/mnt" "$MAINT" verify --config "$TMP/verify-tr.conf" >/dev/null 2>&1 || rc=$?
+  assert_eq "0" "$rc" "verify under tr_TR exits 0 for I:\ and a distro with an I"
+  assert_eq "zstd -t $TMP/mnt/i/wsl/ubuntu-iot_2026-02-01_0100.tar.zst" "$(cat "$TMP/zstd.calls")" "verify under tr_TR lowercases I to i"
+else
+  echo "SKIP tr_TR locale cannot be generated here"
+fi
+
 # A root that is not a local drive path is refused, not mangled.
 printf '%s\n' 'backup_root = \\server\share' > "$TMP/unc.conf"
 rc=0
@@ -331,5 +369,33 @@ assert_fails "printf '%s' \"\$out\" | grep -q '$CV'" "plain clean leaves the cla
 rc=0; out=$(HOME="$TMP/cvhome" "$MAINT" clean --dry-run --sessions 2>&1) || rc=$?
 assert_eq "0" "$rc" "clean --dry-run --sessions exits 0"
 assert_contains "$out" "DRY $CV/1.0.0" "clean --sessions still prunes old claude versions"
+
+
+# --- exit code is the contract between the halves (docs/how-it-works.md) ---
+# Usage errors exit 2, not just "non-zero"; Invoke-Wsl throws on any non-zero
+# so a 1 would still throw, but README documents 2 for usage/config errors.
+# A failed clean exits 1 and does not write lastrun.clean, so --if-stale does
+# not count it as a run. The rule's target is the fixture HOME, an ancestor of
+# $HOME/.ssh, which is_protected refuses.
+mkdir -p "$HOME/.ssh" "$HOME/junk"
+head -c 2048 /dev/zero > "$HOME/junk/blob"
+printf '%s purge - yes\n' "$HOME" > "$TMP/refused.rules"
+rm -f "$STATE_FILE"
+rc=0; err=$("$MAINT" clean --rules "$TMP/refused.rules" 2>&1 1>/dev/null) || rc=$?
+assert_eq "1" "$rc" "a refused clean exits 1 through the CLI"
+assert_contains "$err" "rule(s) failed" "a refused clean reports the failure"
+assert_fails "grep -q '^lastrun.clean=' \"$STATE_FILE\" 2>/dev/null" "a failed clean writes no lastrun.clean"
+out=$("$MAINT" clean --if-stale 7 --rules "$TMP/refused.rules" 2>&1) || true
+assert_fails "printf '%s' \"\$out\" | grep -q 'not stale'" "a failed clean does not satisfy --if-stale"
+
+# A dead docker client: exit 1, no lastrun.docker. The shim fails `docker info`.
+mkdir -p "$TMP/deadbin"
+printf '#!/bin/sh\nexit 1\n' > "$TMP/deadbin/docker"
+chmod +x "$TMP/deadbin/docker"
+rm -f "$STATE_FILE"
+rc=0; err=$(PATH="$TMP/deadbin:$PATH" DOCKER_CANDIDATES=docker "$MAINT" docker --yes < /dev/null 2>&1 1>/dev/null) || rc=$?
+assert_eq "1" "$rc" "an unreachable docker exits 1 through the CLI"
+assert_contains "$err" "docker not reachable" "an unreachable docker is named through the CLI"
+assert_fails "grep -q '^lastrun.docker=' \"$STATE_FILE\" 2>/dev/null" "a failed docker prune writes no lastrun.docker"
 
 echo "RESULT $ASSERT_PASS $ASSERT_FAIL"

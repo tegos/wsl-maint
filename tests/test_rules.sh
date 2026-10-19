@@ -58,6 +58,13 @@ assert_fails "rules_parse \"$TMP/pipe.conf\" 2>/dev/null" "a path containing | i
 printf '/tmp/x purge - yes' > "$TMP/no-newline.conf"
 assert_eq "/tmp/x|purge|-|yes" "$(rules_parse "$TMP/no-newline.conf")" "last line without a trailing newline is read"
 
+# A UTF-8 BOM (Notepad, PS 5.1 Out-File -Encoding UTF8) is not part of the
+# first rule's path, and not a malformed rule in front of a first-line comment.
+printf '\xef\xbb\xbf~/x purge - yes\n' > "$TMP/bom.conf"
+assert_eq "$HOME/x|purge|-|yes" "$(rules_parse "$TMP/bom.conf" 2>/dev/null)" "a BOM before the first rule is dropped"
+printf '\xef\xbb\xbf# comment\r\n~/x purge - yes\r\n' > "$TMP/bom2.conf"
+assert_eq "$HOME/x|purge|-|yes" "$(rules_parse "$TMP/bom2.conf" 2>/dev/null)" "a BOM before a first-line comment is not a rule"
+
 # --- parser: policy args are validated ---
 # Regression: the arg passed unchecked. `age` strips one lowercase `d` and awk
 # compared the rest as text, so `age 30D` / `age 1w` deleted 5-day-old entries
@@ -75,6 +82,17 @@ assert_contains "$(rules_parse "$TMP/bad-arg.conf" 2>&1 >/dev/null)" "/tmp/x age
 printf '/tmp/x age 1w yes\n/tmp/y purge - yes\n' > "$TMP/bad-arg.conf"
 assert_eq "/tmp/y|purge|-|yes" "$(rules_parse "$TMP/bad-arg.conf" 2>/dev/null)" \
   "a bad-arg line is dropped, not passed on"
+# The auto column is a two-valued switch (rules.conf:3). Anything else used to
+# parse and read as "no": the rule never ran on plain `maint clean`, which
+# exited 0 and recorded lastrun as if it had.
+for bad in Yes YES true y 1 -; do
+  printf '/tmp/x purge - %s\n' "$bad" > "$TMP/bad-auto.conf"
+  assert_fails "rules_parse \"$TMP/bad-auto.conf\" >/dev/null 2>&1" "bad auto refused: $bad"
+done
+assert_contains "$(rules_parse "$TMP/bad-auto.conf" 2>&1 >/dev/null)" "auto must be yes or no, got '-'" \
+  "a bad auto names the token"
+printf '/tmp/x purge yes -\n' > "$TMP/bad-auto.conf"
+assert_fails "rules_parse \"$TMP/bad-auto.conf\" >/dev/null 2>&1" "swapped arg/auto refused"
 for good in "age 30" "age 30d" "age 0d" "age 045d" "keep-newest 1" "keep-newest 10" \
             "vacuum 100M" "vacuum 1G" "vacuum 512K" "vacuum 1T" "vacuum 4096" \
             "purge -" "pw-orphan -"; do
@@ -89,12 +107,75 @@ done
 # user-supplied EasyOCR models, the Hugging Face token, pinned puppeteer
 # browsers, an owner-only tool's cache. They must need --sessions. The
 # Playwright cache joins them: a project outside the scan roots looks unpinned.
-assert_ok "rules_parse ../rules.conf >/dev/null 2>&1" "shipped rules.conf parses cleanly"
-shipped=$(rules_parse ../rules.conf)
-for p in ~/.cache/ms-playwright ~/.cache/ms-playwright-mcp ~/.EasyOCR ~/.cache/huggingface ~/.cache/puppeteer ~/.cache/wayback-video; do
-  row=$(echo "$shipped" | grep -F "$p|" | head -1)
-  assert_eq "no" "${row##*|}" "shipped rules.conf: $p is auto=no"
+# Under a fixture HOME: on the real one a cache dir that is a symlink would
+# be resolved to its target and the rows below would not match by name.
+SHIPPED_HOME="$TMP/shipped-home"; mkdir -p "$SHIPPED_HOME"
+assert_ok "HOME=\"$SHIPPED_HOME\" rules_parse ../rules.conf >/dev/null 2>&1" "shipped rules.conf parses cleanly"
+shipped=$(HOME="$SHIPPED_HOME" rules_parse ../rules.conf)
+for p in .cache/ms-playwright .cache/ms-playwright-mcp .EasyOCR .cache/huggingface .cache/puppeteer .cache/wayback-video; do
+  row=$(echo "$shipped" | grep -F "$SHIPPED_HOME/$p|" | head -1)
+  assert_eq "no" "${row##*|}" "shipped rules.conf: ~/$p is auto=no"
 done
+
+# --- a rule root that is a symlink ---
+# Regression: `[ -d ]` follows the link so the rule was accepted, but `find`
+# (-P) does not descend a command-line symlink: purge/age/keep-newest listed
+# nothing, clean printed "freed: 0.0", exit 0, and recorded a run. The root
+# is now resolved once, so the walk and the guard see the real directory.
+mkdir -p "$TMP/lnk-real/a" "$TMP/lnk-real/b"
+head -c 4096 /dev/zero > "$TMP/lnk-real/a/blob"
+ln -s "$TMP/lnk-real" "$TMP/lnk-root"
+printf '%s purge - yes\n' "$TMP/lnk-root" > "$TMP/lnk.conf"
+assert_eq "$TMP/lnk-real|purge|-|yes" "$(rules_parse "$TMP/lnk.conf" 2>/dev/null)" \
+  "a symlinked root is resolved to its target"
+assert_contains "$(rules_parse "$TMP/lnk.conf" 2>&1 >/dev/null)" "is a symlink; using $TMP/lnk-real" \
+  "a resolved root is announced"
+assert_eq "2" "$(rule_targets "$TMP/lnk-real" purge - | wc -l)" "the resolved root is walked"
+# Regression: a trailing "/" or "/." made find resolve the link while the
+# targets kept the link's spelling (root//name), which the lexical guard then
+# let through: `~/.cache/lnk/ purge` with lnk -> ~/.ssh deleted id_rsa.
+mkdir -p "$TMP/lnk-prot"; head -c 2048 /dev/zero > "$TMP/lnk-prot/id_rsa"
+ln -s "$TMP/lnk-prot" "$TMP/lnk-to-prot"
+REAL_PATTERNS=("${PROTECTED_PATTERNS[@]}")
+PROTECTED_PATTERNS+=("$TMP/lnk-prot")
+for spelling in "$TMP/lnk-to-prot/" "$TMP/lnk-to-prot/."; do
+  printf '%s purge - yes\n' "$spelling" > "$TMP/lnk2.conf"
+  assert_eq "$TMP/lnk-prot|purge|-|yes" "$(rules_parse "$TMP/lnk2.conf" 2>/dev/null)" \
+    "a symlinked root with a trailing slash resolves to its target: $spelling"
+  DRY_RUN=1
+  out=$(rule_run "$TMP/lnk-prot" purge - 2>"$TMP/lnk2.err"); rc=$?
+  assert_eq "1" "$rc" "the resolved protected target fails the rule: $spelling"
+  assert_contains "$(cat "$TMP/lnk2.err")" "refusing to delete protected path" "the guard sees the real path: $spelling"
+  assert_fails "printf '%s' \"\$out\" | grep -q '^ *DRY'" "nothing under the protected target is announced: $spelling"
+done
+assert_ok "[ -f \"$TMP/lnk-prot/id_rsa\" ]" "the protected file survived"
+# A protected name that is itself a symlink elsewhere stays protected by its
+# spelling: resolving it would have made ~/.config deletable through the link.
+mkdir -p "$TMP/lnk-elsewhere"; touch "$TMP/lnk-elsewhere/secret"
+ln -s "$TMP/lnk-elsewhere" "$TMP/lnk-named-prot"
+PROTECTED_PATTERNS+=("$TMP/lnk-named-prot")
+printf '%s purge - yes\n' "$TMP/lnk-named-prot" > "$TMP/lnk3.conf"
+assert_fails "rules_parse \"$TMP/lnk3.conf\" >/dev/null 2>&1" "a protected symlinked root is refused at parse"
+assert_contains "$(rules_parse "$TMP/lnk3.conf" 2>&1 >/dev/null)" "rule path is protected" "the refusal names the reason"
+# Regression: only the last segment was checked with `[ -L ]`, so a symlink
+# higher up (`~/.cache/lnk/sub` with lnk -> ~/.ssh) left the root unresolved
+# and the targets kept the link's spelling: ~/.ssh/sub/id was deleted.
+mkdir -p "$TMP/lnk-prot/sub"; head -c 2048 /dev/zero > "$TMP/lnk-prot/sub/id"
+printf '%s purge - yes\n' "$TMP/lnk-to-prot/sub" > "$TMP/lnk4.conf"
+assert_eq "$TMP/lnk-prot/sub|purge|-|yes" "$(rules_parse "$TMP/lnk4.conf" 2>/dev/null)" \
+  "a symlink above the rule root is resolved too"
+DRY_RUN=0
+out=$(rule_run "$TMP/lnk-prot/sub" purge - 2>"$TMP/lnk4.err"); rc=$?
+assert_eq "1" "$rc" "the protected target under a mid-path link fails the rule"
+assert_contains "$(cat "$TMP/lnk4.err")" "refusing to delete protected path" "the guard sees the real path"
+assert_ok "[ -f \"$TMP/lnk-prot/sub/id\" ]" "the file under the protected dir survived"
+DRY_RUN=1
+# A root that does not exist is left as written: rule_targets skips it.
+printf '%s purge - yes\n' "$TMP/no-such/dir" > "$TMP/lnk5.conf"
+assert_eq "$TMP/no-such/dir|purge|-|yes" "$(rules_parse "$TMP/lnk5.conf" 2>/dev/null)" \
+  "a missing root parses unchanged"
+PROTECTED_PATTERNS=("${REAL_PATTERNS[@]}")
+# A symlink inside a rule root is still removed as a link, never followed.
 
 # --- keep-newest ---
 mkdir -p "$TMP/kn"
@@ -260,6 +341,15 @@ assert_fails "(PATH=\"$TMP/fakefind:\$PATH\"; rule_run \"$TMP/age-fail\" age 30d
 err=$(PATH="$TMP/fakefind:$PATH"; rule_targets "$TMP/age-fail" age 30d 2>&1 >/dev/null)
 assert_contains "$err" "simulated walk error" "age: find's own error text is in the warning"
 assert_fails "case \":$PATH:\" in *fakefind*) true ;; *) false ;; esac" "the fake find did not leak into PATH"
+# purge and keep-newest fail the same way, and say why: their find's stderr
+# used to be discarded, so a busybox find (no -printf) left "rule(s) failed"
+# as the only word.
+for pol in "purge -" "keep-newest 1"; do
+  assert_fails "(PATH=\"$TMP/fakefind:\$PATH\"; rule_targets \"$TMP/age-fail\" $pol >/dev/null 2>&1)" \
+    "$pol: a failed walk makes rule_targets fail"
+  err=$(PATH="$TMP/fakefind:$PATH"; rule_targets "$TMP/age-fail" $pol 2>&1 >/dev/null)
+  assert_contains "$err" "simulated walk error" "$pol: find's own error text reaches stderr"
+done
 
 # A timestamp in the future is unknown, not "used now": a file dated 2030 would
 # otherwise pin its entry until 2030. The entry falls back to its other times.
@@ -365,8 +455,11 @@ assert_eq "434320180" "$vacuum_out" "a comma decimal separator reads as the same
 # that, so the vacuum was skipped on exactly the boxes that had been configured
 # properly for it. The only meaningful probe is the real command.
 narrow_sudo() {
-  # Emulates NOPASSWD for one command and nothing else.
-  [ "${1:-}" = "-n" ] && shift
+  # Emulates NOPASSWD for one command and nothing else. `-n` is part of the
+  # contract: without it a real sudo prompts at a terminal (an elevated
+  # maint.bat window) or errors out, never "skips with a warning".
+  [ "${1:-}" = "-n" ] || { echo "sudo: a password is required" >&2; return 1; }
+  shift
   if [ "${1:-}" = "journalctl" ] && [ "${2:-}" = "--vacuum-size=100M" ]; then
     return 0
   fi

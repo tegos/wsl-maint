@@ -21,6 +21,11 @@ is_consent() {
   esac
 }
 
+# Lowercase under the C locale. `${x,,}` folds by the current locale, and
+# tr_TR turns `I` into dotless `ı`: a drive letter I: became /mnt/ı and a
+# distro with an I a prefix no archive carries. A subshell, so LC_ALL stays.
+lc_ascii() ( LC_ALL=C; printf '%s\n' "${1,,}" )
+
 human() {
   local b="${1:-0}"
   numfmt --to=iec --format='%.1f' "$b" 2>/dev/null || echo "${b}B"
@@ -35,33 +40,6 @@ dir_bytes() {
     *) echo "$out" ;;
   esac
 }
-
-# Paths that must never be deleted, regardless of rules.conf.
-# Matched as the path itself or any path beneath it.
-# Only the test suite may modify this array (it appends sandbox paths). Production
-# code must never add, drop or reorder entries: the guard would keep reporting
-# success over a shrunken list. Not `readonly` because the tests need to append.
-PROTECTED_PATTERNS=(
-  "$HOME/.ssh"
-  "$HOME/.gnupg"
-  "$HOME/.config"
-  "$HOME/.claude/projects/*/memory"
-  # The author's own code and project dirs. Not part of the design: on another
-  # box they usually do not exist and protect nothing, which is harmless.
-  "$HOME/scripts"
-  "$HOME/work"
-  "$HOME/tools"
-  # Windows drives (/mnt/c, /mnt/d, ...) are NOT listed here: a glob entry
-  # would be expanded by is_protected's ancestor loop, a readdir of /mnt on
-  # every call. is_protected checks them with a `case` instead.
-  "/etc"
-  # "/" is deliberately NOT listed: `${p%/}` would reduce it to the empty
-  # string and it would be skipped by the `[ -n "$p" ]` guard below anyway.
-  # "/" is refused by the empty-target guard in is_protected instead. Making a
-  # "/" prefix rule actually work here would be wrong, not just redundant: it
-  # would match every path on the system and make rules.conf's
-  # /var/log/journal row (and every other absolute-path rule) undeletable.
-)
 
 # Lexical path normalization: collapses repeated slashes, drops "." and
 # resolves ".." against the preceding segment. Deliberately not `realpath`,
@@ -92,6 +70,58 @@ lexical_path() {
     echo "${out#/}"
   fi
 }
+
+# $HOME as the guard compares it: lexical_path is applied to every
+# TARGET, so the patterns must be built from the same shape. A raw HOME with
+# a trailing slash (`/home/u/`, straight from /etc/passwd or an exported
+# launcher value), `//` or `/.` gave patterns like `/home/u//.ssh` that no
+# normalised target ever matched, and ~/.ssh, ~/.gnupg, ~/.config and the
+# memory dirs were silently unprotected.
+_MAINT_HOME=$(lexical_path "$HOME")
+_MAINT_HOME="${_MAINT_HOME%/}"
+
+# Paths that must never be deleted, regardless of rules.conf.
+# Matched as the path itself or any path beneath it.
+# Only the test suite may modify this array (it appends sandbox paths). Production
+# code must never add, drop or reorder entries after load (the resolved-HOME
+# copies below are built once, at source time): the guard would keep reporting
+# success over a shrunken list. Not `readonly` because the tests need to append.
+PROTECTED_PATTERNS=(
+  "$_MAINT_HOME/.ssh"
+  "$_MAINT_HOME/.gnupg"
+  "$_MAINT_HOME/.config"
+  "$_MAINT_HOME/.claude/projects/*/memory"
+  # The author's own code and project dirs. Not part of the design: on another
+  # box they usually do not exist and protect nothing, which is harmless.
+  "$_MAINT_HOME/scripts"
+  "$_MAINT_HOME/work"
+  "$_MAINT_HOME/tools"
+  # Windows drives (/mnt/c, /mnt/d, ...) are NOT listed here: a glob entry
+  # would be expanded by is_protected's ancestor loop, a readdir of /mnt on
+  # every call. is_protected checks them with a `case` instead.
+  "/etc"
+  # "/" is deliberately NOT listed: `${p%/}` would reduce it to the empty
+  # string and it would be skipped by the `[ -n "$p" ]` guard below anyway.
+  # "/" is refused by the empty-target guard in is_protected instead. Making a
+  # "/" prefix rule actually work here would be wrong, not just redundant: it
+  # would match every path on the system and make rules.conf's
+  # /var/log/journal row (and every other absolute-path rule) undeletable.
+)
+
+# rules_parse resolves a rule root through its symlinks, so with a HOME that
+# itself sits behind one (/home -> /data/home) the targets carry the resolved
+# spelling, which the entries above never match. The HOME-based entries are
+# repeated in that spelling once, here at load time.
+_MAINT_HOME_REAL=$(readlink -f -- "$_MAINT_HOME" 2>/dev/null) || _MAINT_HOME_REAL=""
+if [ -n "$_MAINT_HOME" ] && [ -n "$_MAINT_HOME_REAL" ] && [ "$_MAINT_HOME_REAL" != / ] \
+  && [ "$_MAINT_HOME_REAL" != "$_MAINT_HOME" ]; then
+  for _maint_p in "${PROTECTED_PATTERNS[@]}"; do
+    case "$_maint_p" in
+      "$_MAINT_HOME"/*) PROTECTED_PATTERNS+=("$_MAINT_HOME_REAL${_maint_p#"$_MAINT_HOME"}") ;;
+    esac
+  done
+  unset _maint_p
+fi
 
 is_protected() {
   # Normalized first: `//` and `$HOME/../<user>/.ssh` must not walk around
@@ -188,12 +218,34 @@ safe_rm() {
     return 1
   fi
   [ -e "$target" ] || return 0
+  # A target that is a mount point is never deleted, by any policy: `rm -rf`
+  # does not stop at a mount, so a drvfs or bind mount of a Windows drive
+  # under a cache dir was emptied through a target the lexical guard could
+  # not see (no /mnt/ in its name), while the estimate (`du -x`) had counted
+  # none of it. Only `age` guarded mounts, and only inside entries. Checked
+  # before the dry-run branch so a dry run shows the same refusal. lstat, so a
+  # symlink entry keeps its parent's device and is still removed as a link. A
+  # bind mount on the same device is not detected here (same limit as -xdev).
+  if [ -d "$target" ] && [ ! -L "$target" ]; then
+    local dev pdev
+    if ! dev=$(stat -c %d -- "$target") || ! pdev=$(stat -c %d -- "$(dirname -- "$target")"); then
+      log_err "cannot stat $target; not deleted"
+      return 1
+    fi
+    if [ "$dev" != "$pdev" ]; then
+      log_err "refusing to delete mount point: $target"
+      return 1
+    fi
+  fi
   if [ "$DRY_RUN" = "1" ]; then
     echo "DRY $target"
   else
     # Tested, not followed by a bare echo: the echo's status used to be the
     # function's, so a target rm only half deleted logged RM and returned 0.
-    if ! rm -rf -- "$target"; then
+    # --one-file-system: a mount nested deeper inside the target is skipped
+    # (rm then exits non-zero and the warning below reports the leftover)
+    # instead of being emptied.
+    if ! rm -rf --one-file-system -- "$target"; then
       log_warn "could not fully delete $target"
       return 1
     fi

@@ -43,10 +43,16 @@ _rule_arg_ok() {
 # split such a path into fragments and bind the wrong columns, then drop the
 # line without a word.
 rules_parse() {
-  local file="$1" line path policy arg auto rc=0
+  local file="$1" line path policy arg auto real rc=0 n=0
   [ -f "$file" ] || { log_err "rules file not found: $file"; return 1; }
   # `|| [ -n "$line" ]` so a last line with no trailing newline is still read.
   while IFS= read -r line || [ -n "$line" ]; do
+    n=$((n + 1))
+    # A BOM is what Notepad and PS 5.1's UTF8 encoding put in front of line 1
+    # (config.sh strips it the same way). Left in, it became part of a
+    # first-line rule's path, which then matched no directory and silently
+    # freed nothing, or a lone invisible "malformed rule" before a comment.
+    [ "$n" -eq 1 ] && line="${line#$'\xef\xbb\xbf'}"
     line="${line%%#*}"
     [[ "$line" =~ [^[:space:]] ]] || continue
     if [[ ! "$line" =~ ^[[:space:]]*(.*[^[:space:]])[[:space:]]+([^[:space:]]+)[[:space:]]+([^[:space:]]+)[[:space:]]+([^[:space:]]+)[[:space:]]*$ ]]; then
@@ -67,6 +73,34 @@ rules_parse() {
     case "$path" in
       *"|"*) log_err "rule path may not contain '|': $path"; rc=1; continue ;;
     esac
+    # Normalised the way safe_rm normalises every target (lexical_path). A
+    # trailing "/" or "/." made find resolve a symlinked root while the
+    # targets kept the link's spelling (~/.cache/lnk//id_rsa for a lnk that
+    # points at ~/.ssh), which the lexical guard then judged as deletable.
+    path=$(lexical_path "$path")
+    # Resolved whole, not only when the last segment is a link: a symlink
+    # higher up (`~/.cache/lnk/sub` with lnk -> ~/.ssh) left the root
+    # unresolved, find walked through it, and every target kept the link's
+    # spelling, which the lexical guard judged deletable: ~/.ssh/sub/id went.
+    # A root that does not exist is left as written (rule_targets skips it).
+    if [ -e "$path" ] || [ -L "$path" ]; then
+      if ! real=$(readlink -f -- "$path") || [ -z "$real" ]; then
+        log_err "cannot resolve symlinked rule path: $path"; rc=1; continue
+      fi
+      if [ "$real" != "$path" ]; then
+        # A root that is itself a symlink is walked nowhere by `find` (-P, the
+        # default): purge, age and keep-newest listed nothing, clean reported
+        # success and recorded a run, audit showed the link's byte length.
+        # Resolved once so the walk and the guard both see the real directory.
+        # The spelled root is judged first: ~/.config pointing at another disk
+        # must stay protected by its name, not become deletable through it.
+        if is_protected "$path"; then
+          log_err "rule path is protected: $path"; rc=1; continue
+        fi
+        log_info "rule path $path is a symlink; using $real"
+        path="$real"
+      fi
+    fi
     case " $KNOWN_POLICIES " in
       *" $policy "*) ;;
       *) log_err "unknown policy: $policy"; rc=1; continue ;;
@@ -76,6 +110,13 @@ rules_parse() {
       rc=1
       continue
     fi
+    # Exact yes/no only. clean_run treats anything but "yes" as "no", so an
+    # unchecked `Yes`, `true` or a swapped arg/auto pair (`purge yes -`) used
+    # to parse cleanly and silently never run on plain `maint clean`.
+    case "$auto" in
+      yes|no) ;;
+      *) log_err "auto must be yes or no, got '$auto': $line"; rc=1; continue ;;
+    esac
     printf '%s|%s|%s|%s\n' "$path" "$policy" "$arg" "$auto"
   done < "$file"
   return "$rc"
@@ -190,8 +231,11 @@ rule_targets() {
   local path="$1" policy="$2" arg="$3"
   [ -d "$path" ] || return 0
   case "$policy" in
+    # find's stderr is kept for purge and keep-newest: pipefail already failed
+    # the rule when the walk failed, but with the reason discarded "N rule(s)
+    # failed" was all a busybox find (no -printf) or an unreadable root said.
     purge)
-      find "$path" -mindepth 1 -maxdepth 1 -printf '%P\0' 2>/dev/null \
+      find "$path" -mindepth 1 -maxdepth 1 -printf '%P\0' \
         | _emit_entries "$path" purge
       ;;
     age)
@@ -201,7 +245,7 @@ rule_targets() {
       local keep="$arg"
       # NUL-separated through the ranking too: a newline-named entry still
       # takes its place by mtime, and is only dropped once it is a target.
-      find "$path" -mindepth 1 -maxdepth 1 -printf '%T@ %P\0' 2>/dev/null \
+      find "$path" -mindepth 1 -maxdepth 1 -printf '%T@ %P\0' \
         | sort -z -rn | tail -z -n "+$((keep + 1))" | cut -z -d' ' -f2- \
         | _emit_entries "$path" keep-newest
       ;;

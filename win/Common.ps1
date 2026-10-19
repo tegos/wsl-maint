@@ -32,8 +32,14 @@ function Get-MaintConfig {
         if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { return $cfg }
     }
 
+    # -Encoding UTF8: without it Windows PowerShell 5.1 decodes a BOM-less
+    # file with the ANSI code page, while the WSL side reads UTF-8 bytes.
+    # Notepad (since Windows 10 1903) and VS Code write UTF-8 without a BOM,
+    # so a non-ASCII backup_root became a different, mojibake path on this
+    # half: the archives went there and `maint verify` never found them.
+    # PS 5.1's UTF8 reader honours (and strips) a BOM when there is one.
     $n = 0
-    foreach ($raw in @(Get-Content -LiteralPath $file)) {
+    foreach ($raw in @(Get-Content -LiteralPath $file -Encoding UTF8)) {
         $n++
         $at = "${file}:$n"
         # A BOM is what Notepad and PS 5.1's UTF8 encoding put in front of line 1.
@@ -99,7 +105,9 @@ function ConvertTo-WslPath {
     # relative) is refused rather than silently mangled.
     param([Parameter(Mandatory)][string]$WindowsPath, [string]$What = 'path')
     Assert-LocalDrivePath $WindowsPath -What $What
-    "/mnt/" + $WindowsPath.Substring(0, 1).ToLower() + $WindowsPath.Substring(2).Replace('\', '/')
+    # ToLowerInvariant: .ToLower() follows the user's culture, and tr-TR maps
+    # I to dotless i, so I:\ became /mnt/<dotless i> and every WSL call failed.
+    "/mnt/" + $WindowsPath.Substring(0, 1).ToLowerInvariant() + $WindowsPath.Substring(2).Replace('\', '/')
 }
 
 function Get-LxssDistroEntries {
@@ -212,9 +220,24 @@ function Assert-Admin {
 function Invoke-Wsl {
     param([Parameter(Mandatory)][string[]]$Arguments)
     Write-MaintLog -Message ("wsl " + ($Arguments -join ' '))
-    & wsl.exe @Arguments
-    if ($LASTEXITCODE -ne 0) {
-        throw ("wsl exited " + $LASTEXITCODE + ": wsl " + ($Arguments -join ' '))
+    # 'Continue' for just the native call (pitfall 3 in docs/how-it-works.md).
+    # Under 'Stop', PS 5.1 turns a wsl.exe stderr line into a terminating
+    # NativeCommandError whenever it redirects the child's stderr: with 2>&1,
+    # and also when powershell.exe's own stderr is a file or pipe (an elevated
+    # prompt or task running `maint.bat full -Unattended > log 2>&1`).
+    # wsl/maint logs every [info] line to stderr, so the proxy verbs and
+    # backup's clean step threw on the first line of a successful run there.
+    # The exit code decides, as it always did; output still flows through.
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        & wsl.exe @Arguments
+        $code = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $prevEap
+    }
+    if ($code -ne 0) {
+        throw ("wsl exited " + $code + ": wsl " + ($Arguments -join ' '))
     }
 }
 

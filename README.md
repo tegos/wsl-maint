@@ -14,8 +14,9 @@ distro, prunes the Docker build cache and dangling volumes, exports the distro t
 (`docker_data.vhdx`) with `Optimize-VHD`.
 
 Looking is safe: `maint audit` and every `--dry-run` / `-DryRun` delete nothing. Read up
-before running `full` and `compact` (they shut WSL down) and `maint docker --named-volumes`
-(it can remove named volumes, see [Safety](#safety)).
+before running `backup` (its export stops the distro: every shell and process inside it
+dies), `full` and `compact` (they shut WSL down) and `maint docker --named-volumes` (it can
+remove named volumes, see [Safety](#safety)).
 
 Two halves share one config file. The Windows half (`maint.bat` around `maint.ps1`) does
 whatever stops the VM or needs admin: backup, compact, Defender exclusions, `%TEMP%`
@@ -28,7 +29,9 @@ backup verification. Why the split: [docs/how-it-works.md](docs/how-it-works.md)
   `maint space` finds the distro disk through the WSL registry (`reg.exe` over interop),
   so imported distros and disks off `C:` work; without interop it falls back to the
   Store package folder.
-- `jq` and `zstd` inside the distro.
+- Inside the distro: GNU coreutils and findutils (what Debian, Ubuntu, Fedora and openSUSE
+  ship; a busybox-based distro such as Alpine needs `apk add coreutils findutils`), plus
+  `jq` and `zstd`.
 - Admin for `full`, `backup`, `compact` and `defender`; `maint.bat` asks through UAC.
 - The Hyper-V PowerShell module for `compact` and `full` (Windows Home lacks it;
   everything else works there).
@@ -67,8 +70,9 @@ backup verification. Why the split: [docs/how-it-works.md](docs/how-it-works.md)
    On Windows, from an elevated cmd: `maint.bat backup -DryRun` (needs `backup_root` and
    40 GB free there).
 
-5. Take a first backup before anything is deleted. `backup` normally cleans first;
-   `-NoClean` exports the distro as it is:
+5. Take a first backup before anything is deleted. Close anything running inside the
+   distro first: the export stops it. `backup` normally cleans first; `-NoClean` exports
+   the distro as it is:
 
    ```bat
    maint.bat backup -NoClean
@@ -105,7 +109,7 @@ Playwright rule is `auto=no` for that reason: it runs only with `--sessions`.
 maint.bat full        clean -> fstrim -> export -> zstd -> verify -> retention -> shutdown -> Optimize-VHD
 maint.bat backup      same, without the compact
 maint.bat compact     wsl --shutdown, then Optimize-VHD only
-maint.bat winclean    empty Windows %TEMP% and the recycle bin
+maint.bat winclean    empty Windows %TEMP%, %LOCALAPPDATA%\Temp and the recycle bin
 maint.bat defender    add Defender exclusions for the WSL/Docker disks and processes
 maint.bat audit|clean|docker   run the WSL verb (better: run it inside WSL, no UAC)
 ```
@@ -139,7 +143,8 @@ Only when you run the verb that does it:
 - Cache entries listed in `rules.conf` (`maint clean`).
 - The Docker build cache and anonymous dangling volumes (`maint docker`); named dangling
   volumes outside the guard only with `--named-volumes` or `docker_named_volumes = yes`.
-- Windows `%TEMP%` and the recycle bin (`maint.bat winclean`).
+- Windows `%TEMP%` and `%LOCALAPPDATA%\Temp` (normally the same directory) and the recycle
+  bin (`maint.bat winclean`).
 - This tool's own archives beyond the newest `keep`.
 
 Never: Docker images, named volumes without the opt-in, volumes matching the guard
@@ -198,8 +203,8 @@ daytime slot with `@reboot ... --if-stale`:
 0 13 * * 0   $HOME/.local/bin/maint docker
 ```
 
-Without a terminal and `--yes`, `maint docker` keeps the volumes. Keep `full` manual: it
-shuts WSL down.
+Without a terminal and `--yes`, `maint docker` keeps the volumes. Keep `backup` and `full`
+manual: they stop the distro, and `full` shuts WSL down.
 
 ## Tests
 

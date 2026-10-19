@@ -40,6 +40,28 @@ function Invoke-WithConfig {
     }
 }
 
+# maint.conf is one file for both halves, so it is read as UTF-8 like the WSL
+# side reads it, with or without a BOM. The non-ASCII character is built from
+# its code point so this .ps1 stays ASCII (PS 5.1 reads a BOM-less .ps1 as
+# ANSI too).
+function Test-GetMaintConfigReadsUtf8WithAndWithoutBom {
+    $dir = New-TestDir 'maint-conf'
+    $file = Join-Path $dir 'maint.conf'
+    $prev = $env:WSL_MAINT_CONFIG
+    try {
+        $root = 'D:\Sicherungen\' + [char]0x00DC + 'bung'
+        $utf8 = New-Object Text.UTF8Encoding($false)
+        [IO.File]::WriteAllBytes($file, $utf8.GetBytes("backup_root = $root`n"))
+        $env:WSL_MAINT_CONFIG = $file
+        Assert-Eq $root (Get-MaintConfig).BackupRoot 'a BOM-less UTF-8 backup_root is read as written'
+        [IO.File]::WriteAllBytes($file, [byte[]](0xEF, 0xBB, 0xBF) + $utf8.GetBytes("backup_root = $root`n"))
+        Assert-Eq $root (Get-MaintConfig).BackupRoot 'a UTF-8 backup_root behind a BOM is read as written'
+    } finally {
+        $env:WSL_MAINT_CONFIG = $prev
+        Remove-TestDir $dir
+    }
+}
+
 # Throws from Get-MaintConfig, as a string, or $null when it did not throw.
 function Get-ConfigError {
     $err = $null
@@ -468,6 +490,7 @@ try {
     Test-GetMaintConfigDefaults
     Test-GetMaintConfigReadsEachKey
     Test-GetMaintConfigValueSemantics
+    Test-GetMaintConfigReadsUtf8WithAndWithoutBom
     Test-GetMaintConfigRejectsBrokenLinesWithFileAndLine
     Test-GetMaintConfigRejectsBadValues
     Test-GetMaintConfigOverrideToMissingFileIsAnError

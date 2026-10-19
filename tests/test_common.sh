@@ -254,4 +254,75 @@ for a in "" " " n N no nope yeah sure 1 "y y" yess; do
 done
 assert_fails "is_consent" "is_consent refuses a missing answer"
 
+
+# --- the protected list survives a non-canonical HOME ---
+# Regression: the patterns were built from the raw $HOME while only the
+# target was normalised, so HOME=/home/u/ gave `/home/u//.ssh` and
+# `~/.ssh purge` was allowed through. Re-sourced in a subshell so the odd
+# HOME never leaks into the rest of this file.
+mkdir -p "$TMP/hs/.ssh"
+for h in "$TMP/hs/" "$TMP//hs" "$TMP/hs/."; do
+  assert_ok "HOME=\"$h\" bash -c 'source ../wsl/lib/common.sh; is_protected \"\$HOME/.ssh/id_rsa\"'" \
+    "~/.ssh is protected with HOME=$h"
+  assert_ok "HOME=\"$h\" bash -c 'source ../wsl/lib/common.sh; is_protected \"\$HOME/.config/x\"'" \
+    "~/.config is protected with HOME=$h"
+done
+assert_ok "HOME=/ bash -c 'source ../wsl/lib/common.sh; is_protected /.ssh/id_rsa'" "HOME=/ protects /.ssh"
+# A HOME behind a symlink: rules_parse resolves rule roots, so the targets
+# carry the resolved spelling and must still meet the protected entries.
+mkdir -p "$TMP/hreal/.ssh"; ln -s "$TMP/hreal" "$TMP/hlink"
+assert_ok "HOME=\"$TMP/hlink\" bash -c 'source ../wsl/lib/common.sh; is_protected \"$TMP/hreal/.ssh/id_rsa\"'" \
+  "~/.ssh is protected in its resolved spelling when HOME is a symlink"
+assert_ok "HOME=\"$TMP/hlink\" bash -c 'source ../wsl/lib/common.sh; is_protected \"\$HOME/.ssh/id_rsa\"'" \
+  "and still in HOME's own spelling"
+assert_fails "HOME=\"$TMP/hlink\" bash -c 'source ../wsl/lib/common.sh; is_protected \"$TMP/hreal/.cache/x\"'" \
+  "the resolved copies protect nothing extra"
+
+
+# --- safe_rm never deletes through a mount point ---
+# Regression: `rm -rf` does not stop at a mount, so a purge/keep-newest target
+# that was, or held, a mount of another filesystem was emptied, while the
+# estimate (du -x) had counted none of it. Needs an unprivileged mount
+# (unshare -rm); skipped where that is denied.
+mkdir -p "$TMP/mnt-probe"
+if unshare -rm mount -t tmpfs t "$TMP/mnt-probe" 2>/dev/null; then
+  mkdir -p "$TMP/srm/self" "$TMP/srm/nested/m" "$TMP/srm/link-target"
+  out=$(unshare -rm bash -c '
+    . ../wsl/lib/common.sh
+    r="$1"
+    mount -t tmpfs t "$r/self" || exit 9
+    mount -t tmpfs t "$r/nested/m" || exit 9
+    mount -t tmpfs t "$r/link-target" || exit 9
+    head -c 4096 /dev/zero > "$r/self/big"
+    head -c 4096 /dev/zero > "$r/nested/m/big"
+    head -c 16 /dev/zero > "$r/nested/own"
+    head -c 4096 /dev/zero > "$r/link-target/big"
+    ln -s "$r/link-target" "$r/lnk"
+    DRY_RUN=1 safe_rm "$r/self" >"$r/self.dry" 2>"$r/self.dry.err"; echo "dry-self=$?"
+    [ -f "$r/self/big" ] && echo "dry-self-kept"
+    DRY_RUN=0 safe_rm "$r/self" >"$r/self.out" 2>"$r/self.err"; echo "self=$?"
+    [ -f "$r/self/big" ] && echo "self-kept"
+    DRY_RUN=0 safe_rm "$r/nested" >"$r/nested.out" 2>"$r/nested.err"; echo "nested=$?"
+    [ -f "$r/nested/m/big" ] && echo "nested-kept"
+    [ -e "$r/nested/own" ] || echo "nested-own-gone"
+    DRY_RUN=0 safe_rm "$r/lnk" >"$r/lnk.out" 2>"$r/lnk.err"; echo "lnk=$?"
+    [ -L "$r/lnk" ] || echo "lnk-gone"
+    [ -f "$r/link-target/big" ] && echo "lnk-target-kept"
+    exit 0' _ "$TMP/srm")
+  assert_contains "$out" "dry-self=1" "safe_rm: a dry run refuses a mount point target"
+  assert_contains "$(cat "$TMP/srm/self.dry.err")" "refusing to delete mount point" "safe_rm: the dry-run refusal names the mount"
+  assert_fails "grep -q '^DRY' \"$TMP/srm/self.dry\"" "safe_rm: a dry run announces nothing for a mount point"
+  assert_contains "$out" "self=1" "safe_rm: a mount point target fails"
+  assert_contains "$out" "self-kept" "safe_rm: nothing under a mount point target is deleted"
+  assert_contains "$(cat "$TMP/srm/self.err")" "refusing to delete mount point" "safe_rm: the refusal names the mount"
+  assert_contains "$out" "nested=1" "safe_rm: a target holding a mount fails"
+  assert_contains "$out" "nested-kept" "safe_rm: nothing under a nested mount is deleted"
+  assert_contains "$out" "nested-own-gone" "safe_rm: the target's own files still go"
+  assert_contains "$(cat "$TMP/srm/nested.err")" "could not fully delete" "safe_rm: the leftover mount is reported"
+  assert_fails "grep -q '^RM' \"$TMP/srm/nested.out\"" "safe_rm: a half-deleted target is not logged as RM"
+  assert_contains "$out" "lnk=0" "safe_rm: a symlink entry to a mount is removed as a link"
+  assert_contains "$out" "lnk-gone" "safe_rm: the link itself is gone"
+  assert_contains "$out" "lnk-target-kept" "safe_rm: the link's mounted target is intact"
+fi
+
 echo "RESULT $ASSERT_PASS $ASSERT_FAIL"

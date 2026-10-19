@@ -64,6 +64,8 @@ trap 'rm -rf "$TMP"' EXIT
 
 mkdir -p "$TMP/bin" "$TMP/empty-bin"
 export FAKE_DOCKER_CALLS="$TMP/calls.log"
+# Never truncated: every verb the shim ever saw, for the whitelist check at the end.
+export FAKE_DOCKER_ALL_CALLS="$TMP/all-calls.log"
 export FAKE_DOCKER_DANGLING_FILE="$TMP/dangling.txt"
 export FAKE_DOCKER_SURVIVORS_FILE="$TMP/survivors.txt"
 export FAKE_DOCKER_PRUNED_MARK="$TMP/pruned.mark"
@@ -72,6 +74,7 @@ cat > "$TMP/bin/docker" <<'SHIM'
 #!/usr/bin/env bash
 set -uo pipefail
 echo "$*" >> "$FAKE_DOCKER_CALLS"
+echo "$*" >> "$FAKE_DOCKER_ALL_CALLS"
 case "$1" in
   info) exit 0 ;;
   system)
@@ -110,7 +113,10 @@ JSON
     esac
     ;;
 esac
-exit 0
+# Anything else is a verb docker_prune must not issue (README: "Never: Docker
+# images"); fail loudly rather than pretend it worked.
+echo "fake docker: unexpected verb: $*" >&2
+exit 2
 SHIM
 chmod +x "$TMP/bin/docker"
 # $TMP/bin first so the shim wins the lookup for "docker" specifically;
@@ -210,16 +216,20 @@ config_defaults; rm -rf "$TMPC"
 
 # Named dangling volumes are kept by default, guard or not: a Compose
 # `mysql_data:` volume is `<project>_mysql_data`, dangling after
-# `docker compose down`. Only the anonymous (64-hex) one is pruned.
-printf "${V1}\napp_mysql_data\nmyapp_esdata\nminio\n" > "$FAKE_DOCKER_DANGLING_FILE"
+# `docker compose down`. Only the anonymous (exactly 64 lowercase hex) one is
+# pruned: short all-hex names, a 63- or 65-digit one and uppercase hex are
+# somebody's names, and a loosened DOCKER_ANON_RE used to pass this file.
+HEX63=$(printf 'a%.0s' {1..63}); HEX65=$(printf 'a%.0s' {1..65}); HEX64U=$(printf 'A%.0s' {1..64})
+printf "${V1}\napp_mysql_data\nmyapp_esdata\nminio\ncafe\n2024\n${HEX63}\n${HEX65}\n${HEX64U}\n" > "$FAKE_DOCKER_DANGLING_FILE"
 : > "$FAKE_DOCKER_CALLS"; rm -f "$FAKE_DOCKER_PRUNED_MARK"
 out=$(docker_prune 2>"$TMP/named.err")
 rc=$?
 assert_ok "grep -qx 'volume rm ${V1}' \"$FAKE_DOCKER_CALLS\"" "default: only the anonymous volume reaches volume rm"
 assert_contains "$out" "PRUNED 1 dangling volume" "default: the count covers the anonymous volume only"
-for name in app_mysql_data myapp_esdata minio; do
+for name in app_mysql_data myapp_esdata minio cafe 2024 "$HEX63" "$HEX65" "$HEX64U"; do
   assert_contains "$(cat "$TMP/named.err")" "kept named volume: $name" "default: $name is kept and reported as named"
 done
+assert_eq "1" "$(grep -c '^volume rm' "$FAKE_DOCKER_CALLS")" "default: exactly one volume rm call"
 # maint.bat users have no --named-volumes flag: the config key must be named.
 assert_contains "$(cat "$TMP/named.err")" "--named-volumes" "the kept message names the CLI opt-in"
 assert_contains "$(cat "$TMP/named.err")" "docker_named_volumes = yes in maint.conf" "the kept message names the config opt-in"
@@ -425,6 +435,7 @@ printf "${V1}\nmyapp_db\napp_mysql_data\n" > "$FAKE_DOCKER_DANGLING_FILE"
 rc=0
 cli_out=$(STATE_FILE="$TMP/state" ../wsl/maint docker --dry-run --config "$TMP/empty.conf" 2>&1) || rc=$?
 assert_eq "0" "$rc" "maint docker --dry-run exits 0"
+assert_fails "grep -q '^lastrun.docker=' \"$TMP/state\" 2>/dev/null" "maint docker --dry-run writes no lastrun.docker"
 assert_contains "$cli_out" "kept named volume: myapp_db" "maint docker --dry-run lists a named volume as kept"
 assert_contains "$cli_out" "kept named volume: app_mysql_data" "maint docker --dry-run lists app_mysql_data as kept"
 assert_contains "$cli_out" "  ${V1}" "maint docker --dry-run lists the anonymous volume to prune"
@@ -446,5 +457,14 @@ cli_out=$(STATE_FILE="$TMP/state" ../wsl/maint docker --dry-run --named-volumes 
 assert_contains "$cli_out" "DRY docker volume rm (3 dangling volumes)" "without docker_guard_extra the project volume is not guarded"
 out=$(../wsl/maint help 2>&1)
 assert_contains "$out" "--named-volumes" "help documents --named-volumes"
+
+# --- every verb docker_prune issued, across all the runs above ---
+# README "Never: Docker images" / how-it-works "Images are never touched" have
+# no other check: the shim used to exit 0 for any verb, so an added
+# `image prune -af`, `container prune -f`, `system prune` or a guard-bypassing
+# `volume prune -f` passed every assertion above.
+stray=$(grep -vxE 'info|system df --format \{\{json \.\}\}|builder prune -af|volume ls -q -f dangling=true|volume rm .*|volume inspect .*' "$FAKE_DOCKER_ALL_CALLS")
+assert_eq "" "$stray" "docker_prune issues no verb beyond info / system df / builder prune / volume ls|rm|inspect"
+assert_ok "grep -qx 'builder prune -af' \"$FAKE_DOCKER_ALL_CALLS\"" "positive control: the whitelist log saw the build cache prune"
 
 echo "RESULT $ASSERT_PASS $ASSERT_FAIL"

@@ -272,8 +272,37 @@ function Test-BracketedTempIsClearedLiterallyNotItsWildcardSibling {
     } finally { Remove-TestDir $root }
 }
 
+# PS 5.1's Remove-Item -Recurse follows a junction into its target. A junction
+# in %TEMP% (top level, and nested inside a directory) must go as a link, with
+# every file behind it untouched. Junctions need no privilege, unlike symlinks.
+# The target lives in its own sandbox: a .Delete() on the link bypasses the
+# Remove-Item shadow, so this test asserts on the filesystem.
+function Test-JunctionInTempIsRemovedAsALinkNotFollowed {
+    $t = New-CleanSandbox -Files 1 -Prefix 'j'
+    $lad = New-TestDir 'winclean-lad'
+    $target = New-TestDir 'winclean-junction-target'
+    1..3 | ForEach-Object { Set-Content -LiteralPath (Join-Path $target "keep$_.txt") -Value 'keep' }
+    $nested = Join-Path $t 'build'
+    New-Item -ItemType Directory -Path $nested -Force | Out-Null
+    Set-Content -LiteralPath (Join-Path $nested 'obj.tmp') -Value 'junk'
+    try {
+        New-Item -ItemType Junction -Path (Join-Path $t 'link') -Target $target | Out-Null
+        New-Item -ItemType Junction -Path (Join-Path $nested 'link2') -Target $target | Out-Null
+
+        $r = Invoke-WinCleanScenario -TempDir $t -LocalAppData $lad
+
+        Assert-Null $r.Error 'a junction in TEMP does not throw'
+        Assert-Eq 3 @(Get-ChildItem -LiteralPath $target -Force).Count 'every file behind the junctions survives'
+        Assert-False (Test-Path -LiteralPath (Join-Path $t 'link')) 'the top-level junction itself is gone'
+        Assert-False (Test-Path -LiteralPath $nested) 'the directory holding a nested junction is gone'
+        Assert-Eq 0 @(Get-ChildItem -LiteralPath $t -Force).Count 'TEMP is empty afterwards'
+        Assert-NotContains $r.Log 'entries left' 'nothing is reported stuck'
+    } finally { Remove-TestDir $t; Remove-TestDir $lad; Remove-TestDir $target }
+}
+
 Test-DestructiveCmdletsAreShadowed
 Test-DryRunDeletesNothing
+Test-JunctionInTempIsRemovedAsALinkNotFollowed
 Test-BothTempTargetsAreClearedAndBinEmptied
 Test-LockedEntryIsReportedNotSwallowed
 Test-IdenticalTargetsAreDeduplicated
