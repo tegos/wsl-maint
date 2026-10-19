@@ -107,7 +107,7 @@ Playwright rule is `auto=no` for that reason: it runs only with `--sessions`.
 maint.bat full        clean -> fstrim -> export -> zstd -> verify -> retention -> shutdown -> Optimize-VHD
 maint.bat backup      same, without the compact
 maint.bat compact     wsl --shutdown, then Optimize-VHD only
-maint.bat winclean    empty Windows %TEMP% and the recycle bin
+maint.bat winclean    empty Windows %TEMP%, %LOCALAPPDATA%\Temp and the recycle bin
 maint.bat defender    add Defender exclusions for the WSL/Docker disks and processes
 maint.bat audit|clean|docker   run the WSL verb (better: run it inside WSL, no UAC)
 ```
@@ -141,7 +141,8 @@ Only when you run the verb that does it:
 - Cache entries listed in `rules.conf` (`maint clean`).
 - The Docker build cache and anonymous dangling volumes (`maint docker`); named dangling
   volumes outside the guard only with `--named-volumes` or `docker_named_volumes = yes`.
-- Windows `%TEMP%` and the recycle bin (`maint.bat winclean`).
+- Windows `%TEMP%` and `%LOCALAPPDATA%\Temp` (normally the same directory) and the recycle
+  bin (`maint.bat winclean`).
 - This tool's own archives beyond the newest `keep`.
 
 Never: Docker images, named volumes without the opt-in, volumes matching the guard

@@ -317,7 +317,8 @@ sharing violation. No data is damaged; close Docker Desktop and retry.
 
 ### Other verbs
 
-- `winclean`: `%TEMP%` and the Recycle Bin, with free space on C: before and after.
+- `winclean`: `%TEMP%`, `%LOCALAPPDATA%\Temp` (deduplicated when they coincide) and the
+  Recycle Bin, with free space on C: before and after.
 - `defender`: adds Defender exclusions for the vhdx files and WSL/Docker processes
   (`wslservice.exe`, `com.docker.backend.exe` and others), which speeds up I/O
   noticeably. Processes are excluded by full image path, resolved at run time from

@@ -51,7 +51,7 @@ commands:
   backup      clean -> fstrim -> export -> zstd -> verify -> retention
               (-NoClean on backup/full: skip the clean, e.g. for a first backup)
   compact     shutdown + Optimize-VHD only
-  winclean    Windows TEMP and recycle bin
+  winclean    Windows TEMP, %LOCALAPPDATA%\Temp and recycle bin
   defender    Defender exclusions for WSL/Docker paths (-Verify to check only)
   audit       proxy to the WSL-side audit
   clean       proxy to the WSL-side clean

@@ -5,11 +5,10 @@
 # first side-effecting call in each block (Remove-Item, then Clear-RecycleBin);
 # nothing before those two gates deletes anything.
 #
-# Targets match cleanup-windows.bat items 1-2 exactly: the user TEMP dir and
-# %LOCALAPPDATA%\Temp, plus the recycle bin. Item 3 (recycle bin) is kept;
-# items 4-5 of the old batch file (SoftwareDistribution\Download, DISM
-# component cleanup) were commented out there too - admin-only, opt-in, never
-# run - and are intentionally not ported here.
+# Targets: the user TEMP dir and %LOCALAPPDATA%\Temp (the same directory
+# unless TEMP was redirected; both are named in README and the usage text),
+# plus the recycle bin. SoftwareDistribution\Download and DISM component
+# cleanup are deliberately not included: admin-only, opt-in, never run.
 #
 # Files in use are skipped by -ErrorAction SilentlyContinue, matching the
 # behaviour of the del /q /f /s the old batch file used.
