@@ -75,6 +75,17 @@ assert_contains "$(rules_parse "$TMP/bad-arg.conf" 2>&1 >/dev/null)" "/tmp/x age
 printf '/tmp/x age 1w yes\n/tmp/y purge - yes\n' > "$TMP/bad-arg.conf"
 assert_eq "/tmp/y|purge|-|yes" "$(rules_parse "$TMP/bad-arg.conf" 2>/dev/null)" \
   "a bad-arg line is dropped, not passed on"
+# The auto column is a two-valued switch (rules.conf:3). Anything else used to
+# parse and read as "no": the rule never ran on plain `maint clean`, which
+# exited 0 and recorded lastrun as if it had.
+for bad in Yes YES true y 1 -; do
+  printf '/tmp/x purge - %s\n' "$bad" > "$TMP/bad-auto.conf"
+  assert_fails "rules_parse \"$TMP/bad-auto.conf\" >/dev/null 2>&1" "bad auto refused: $bad"
+done
+assert_contains "$(rules_parse "$TMP/bad-auto.conf" 2>&1 >/dev/null)" "auto must be yes or no, got '-'" \
+  "a bad auto names the token"
+printf '/tmp/x purge yes -\n' > "$TMP/bad-auto.conf"
+assert_fails "rules_parse \"$TMP/bad-auto.conf\" >/dev/null 2>&1" "swapped arg/auto refused"
 for good in "age 30" "age 30d" "age 0d" "age 045d" "keep-newest 1" "keep-newest 10" \
             "vacuum 100M" "vacuum 1G" "vacuum 512K" "vacuum 1T" "vacuum 4096" \
             "purge -" "pw-orphan -"; do

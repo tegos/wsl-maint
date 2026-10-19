@@ -76,6 +76,13 @@ rules_parse() {
       rc=1
       continue
     fi
+    # Exact yes/no only. clean_run treats anything but "yes" as "no", so an
+    # unchecked `Yes`, `true` or a swapped arg/auto pair (`purge yes -`) used
+    # to parse cleanly and silently never run on plain `maint clean`.
+    case "$auto" in
+      yes|no) ;;
+      *) log_err "auto must be yes or no, got '$auto': $line"; rc=1; continue ;;
+    esac
     printf '%s|%s|%s|%s\n' "$path" "$policy" "$arg" "$auto"
   done < "$file"
   return "$rc"

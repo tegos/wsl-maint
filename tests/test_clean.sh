@@ -129,6 +129,17 @@ assert_ok "[ -d \"$TMP/badarg/fresh\" ]" "bad arg: the rule's own entries are ke
 assert_ok "[ -d \"$TMP/badarg2/keep\" ]" "bad arg: no other rule runs either"
 DRY_RUN=1
 
+# Same for the auto column: `Yes` used to parse and read as "no", so the rule
+# never ran on plain clean while the run exited 0.
+mkdir -p "$TMP/badauto/x"
+head -c 65536 /dev/urandom > "$TMP/badauto/x/blob"
+printf '%s purge - Yes\n' "$TMP/badauto" > "$TMP/badauto.conf"
+DRY_RUN=0
+assert_fails "clean_run \"$TMP/badauto.conf\" 0 >/dev/null 2>&1" \
+  "a bad auto value makes clean_run fail"
+assert_ok "[ -d \"$TMP/badauto/x\" ]" "bad auto: nothing deleted"
+DRY_RUN=1
+
 # --- a refused target makes the run fail, but the summary still prints ---
 # Regression: `rule_apply ... | sed ... || true` discarded the rule's status, so
 # `clean` had no non-zero exit path at all. The `|| true` was there to stop one
