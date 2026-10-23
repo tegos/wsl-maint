@@ -45,6 +45,9 @@ rc=0; "$MAINT" bogus >/dev/null 2>&1 || rc=$?
 assert_eq "2" "$rc" "unknown subcommand exits 2"
 rc=0; "$MAINT" clean --bogus-flag >/dev/null 2>&1 || rc=$?
 assert_eq "2" "$rc" "unknown flag exits 2"
+# Renamed to --all, no alias: it never touched sessions.
+rc=0; "$MAINT" clean --sessions --rules "$TMP/rules.conf" >/dev/null 2>&1 || rc=$?
+assert_eq "2" "$rc" "removed --sessions flag exits 2"
 
 out=$("$MAINT" audit --rules "$TMP/rules.conf" 2>&1)
 assert_contains "$out" "TOTAL" "audit runs"
@@ -64,9 +67,9 @@ assert_fails "printf '%s' \"\$out\" | grep -q 'not stale'" "--if-stale after onl
 assert_fails "[ -f \"$TMP/auto/x/blob\" ]" "auto rule applied"
 assert_ok "[ -f \"$TMP/manual/y/blob\" ]" "auto=no rule skipped"
 
-# --sessions opts the manual rules in
-"$MAINT" clean --sessions --rules "$TMP/rules.conf" >/dev/null 2>&1
-assert_fails "[ -f \"$TMP/manual/y/blob\" ]" "--sessions applies auto=no rules"
+# --all opts the auto=no rules in
+"$MAINT" clean --all --rules "$TMP/rules.conf" >/dev/null 2>&1
+assert_fails "[ -f \"$TMP/manual/y/blob\" ]" "--all applies auto=no rules"
 
 # --if-stale short-circuits right after a run
 "$MAINT" clean --rules "$TMP/rules.conf" >/dev/null 2>&1
@@ -353,7 +356,7 @@ assert_fails "printf '%s' \"\$out\" | grep -q '^DRY '" "env DRY_RUN=1 without --
 
 # The shipped rules.conf: the claude versions rule keeps the newest by mtime,
 # which need not be the version in use, so plain `clean` must not run it;
-# `--sessions` still does. Dry runs of the default rules against a throwaway
+# `--all` still does. Dry runs of the default rules against a throwaway
 # HOME; sudo and journalctl are the recording fakes above.
 CV="$TMP/cvhome/.local/share/claude/versions"
 mkdir -p "$CV/1.0.0" "$CV/2.0.0"
@@ -366,9 +369,9 @@ rc=0; out=$(HOME="$TMP/cvhome" "$MAINT" clean --dry-run 2>&1) || rc=$?
 assert_eq "0" "$rc" "plain clean --dry-run on the shipped rules exits 0"
 assert_contains "$out" "would free: " "plain clean --dry-run reports its total"
 assert_fails "printf '%s' \"\$out\" | grep -q '$CV'" "plain clean leaves the claude versions dir alone"
-rc=0; out=$(HOME="$TMP/cvhome" "$MAINT" clean --dry-run --sessions 2>&1) || rc=$?
-assert_eq "0" "$rc" "clean --dry-run --sessions exits 0"
-assert_contains "$out" "DRY $CV/1.0.0" "clean --sessions still prunes old claude versions"
+rc=0; out=$(HOME="$TMP/cvhome" "$MAINT" clean --dry-run --all 2>&1) || rc=$?
+assert_eq "0" "$rc" "clean --dry-run --all exits 0"
+assert_contains "$out" "DRY $CV/1.0.0" "clean --all still prunes old claude versions"
 
 
 # --- exit code is the contract between the halves (docs/how-it-works.md) ---

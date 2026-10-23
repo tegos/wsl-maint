@@ -179,7 +179,7 @@ is_protected() {
     # paths that actually exist can be lost, so expanding is enough to close
     # the hole, and it keeps the refusal as narrow as the data justifies: a
     # ~/.claude/projects/<proj> dir with no memory/ inside stays deletable, so
-    # an auto=no session-pruning rule run under --sessions still works.
+    # an auto=no session-pruning rule run under --all still works.
     #
     # `for m in $p` is deliberately unquoted (that is the expansion). With no
     # nullglob -- and this file must not set shell options as a side effect of

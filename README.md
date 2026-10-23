@@ -101,7 +101,7 @@ comments, parsed, never executed. An unknown key stops every command with `file:
 `myapp_cache`. It applies to named volumes, so set it before your first
 `maint docker --named-volumes --yes`. Put your project dirs in
 `pw_scan_roots_extra` so the browsers they pin are not treated as orphans. The
-Playwright rule is `auto=no` for that reason: it runs only with `--sessions`.
+Playwright rule is `auto=no` for that reason: it runs only with `--all`.
 
 ## Usage
 
@@ -126,7 +126,7 @@ you started from. Logs go to `logs\maint-*.log`.
 maint audit              per-rule size, what each rule would free, change since last audit
 maint space              what fills the disks: vhdx size vs data, biggest dirs, Docker usage
 maint clean              apply the auto=yes rules from rules.conf
-maint clean --sessions   also apply the auto=no rules
+maint clean --all        also apply the auto=no rules
 maint docker             prune the build cache; anonymous dangling volumes after a y
 maint docker --yes       same, without asking
 maint docker --named-volumes   named dangling volumes too, minus the guarded names
@@ -169,7 +169,7 @@ rule:
 | `vacuum <size>` | `journalctl --vacuum-size` through `sudo -n` |
 
 The last column is `yes` (runs on plain `maint clean`, for caches that come back on
-their own) or `no` (only with `--sessions`, for logins, models, tokens). Test a new rule
+their own) or `no` (only with `--all`, for logins, models, tokens). Test a new rule
 with `maint clean --dry-run`. A bad arg (`age 1w`, `keep-newest 0`, `vacuum 100m`) fails the run before anything is deleted.
 
 ## Safety

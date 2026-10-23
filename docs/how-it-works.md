@@ -98,7 +98,7 @@ Design points worth copying:
   **before** anything is deleted. A silently skipped line is worse than a crash.
 - Targets are listed one level deep (`find -mindepth 1 -maxdepth 1`), so whole cache
   subfolders are deleted, not single files.
-- `clean` applies only `auto=yes` rules; `auto=no` rules run only with `--sessions`.
+- `clean` applies only `auto=yes` rules; `auto=no` rules run only with `--all`.
 - `#` starts a comment anywhere on a line, and `|` is refused, so neither can appear in
   a path.
 - A rule path that is itself a symlink is resolved to its target once, before the walk
@@ -148,7 +148,7 @@ Each Playwright version pins its own Chromium revision, so upgrades leave orphan
    `~/.npm/_npx`, `~/.cache/ms-playwright-mcp`, plus `pw_scan_roots_extra`). `~/tools`
    is the author's default for where projects live; put your own project directories in
    `pw_scan_roots_extra` in `maint.conf`. A project outside every root looks
-   unpinned, so the shipped rule is `auto=no` and runs only with `--sessions`.
+   unpinned, so the shipped rule is `auto=no` and runs only with `--all`.
 2. Parse each as JSON and collect revisions of browsers whose name starts with
    `chromium`.
 3. Delete only revisions nobody references.
