@@ -60,7 +60,8 @@ commands:
   backup      clean -> fstrim -> export -> zstd -> verify -> retention
               (-NoClean on backup/full: skip the clean, e.g. for a first backup)
   compact     shutdown + Optimize-VHD only
-  winclean    Windows TEMP, %LOCALAPPDATA%\Temp and recycle bin
+  winclean    Windows TEMP, %LOCALAPPDATA%\Temp, recycle bin, and app junk in
+              %LOCALAPPDATA% older than winclean_age days (crash dumps, updater installers)
   defender    Defender exclusions for WSL/Docker paths (-Verify to check only)
   audit       proxy to the WSL-side audit
   clean       proxy to the WSL-side clean
@@ -131,7 +132,7 @@ try {
             if ($DryRun) { $dockerArgs += '--dry-run' }
             Invoke-Wsl $dockerArgs
         }
-        'winclean' { . (Join-Path $PSScriptRoot 'win\WinClean.ps1'); Invoke-MaintWinClean -DryRun:$DryRun }
+        'winclean' { . (Join-Path $PSScriptRoot 'win\WinClean.ps1'); Invoke-MaintWinClean -Config $cfg -DryRun:$DryRun }
         'defender' {
             # defender has no dry run; ignoring the switch would add the
             # exclusions for real behind an operator who asked to look first.

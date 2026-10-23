@@ -183,10 +183,27 @@ for bad in 'distro = Ub*' 'distro = my distro' 'distro = ..\x' 'distro = a/b'; d
   assert_eq "2" "$rc" "rejected: $bad"
   assert_contains "$err" "$TMP/bad-val.conf:1: distro may only contain letters, digits, '.', '_' and '-', got: ${bad#distro = }" "file:line message for: $bad"
 done
-printf 'keep = 1000\ndistro = Ubuntu-22.04_x\n' > "$TMP/good-val.conf"
+# winclean_age: read by the Windows half only, but validated here with the
+# same rule and message as Common.ps1, a whole number 1 to 3650.
+for bad in 'winclean_age = 0' 'winclean_age = abc' 'winclean_age = 3651' 'winclean_age = -1' \
+           'winclean_age = 2.5' 'winclean_age = 99999999999999999999999'; do
+  printf '%s\n' "$bad" > "$TMP/bad-val.conf"
+  rc=0
+  err=$("$MAINT" audit --config "$TMP/bad-val.conf" --rules "$TMP/rules.conf" 2>&1) || rc=$?
+  assert_eq "2" "$rc" "rejected: $bad"
+  assert_contains "$err" "$TMP/bad-val.conf:1: winclean_age must be a whole number from 1 to 3650, got: ${bad#winclean_age = }" "file:line message for: $bad"
+done
+printf 'keep = 1000\ndistro = Ubuntu-22.04_x\nwinclean_age = 03650\n' > "$TMP/good-val.conf"
 rc=0
 "$MAINT" audit --config "$TMP/good-val.conf" --rules "$TMP/rules.conf" >/dev/null 2>&1 || rc=$?
-assert_eq "0" "$rc" "keep = 1000 and a dotted, dashed distro are accepted"
+assert_eq "0" "$rc" "keep = 1000, winclean_age = 03650 and a dotted, dashed distro are accepted"
+# winclean_extra: used and validated by the Windows half only (Common.ps1),
+# but a known key here, or a maint.conf that sets it would stop every verb.
+printf 'winclean_extra = Vendor\\App\\Cache\\*.tmp|Other-updater\\*.zip\n' > "$TMP/extra.conf"
+rc=0
+err=$("$MAINT" audit --config "$TMP/extra.conf" --rules "$TMP/rules.conf" 2>&1) || rc=$?
+assert_eq "0" "$rc" "winclean_extra is a known key on the bash side"
+assert_fails "printf '%s' \"\$err\" | grep -q 'unknown key'" "winclean_extra is not reported as unknown"
 
 # --config wins over the environment variable.
 rc=0
@@ -207,7 +224,7 @@ assert_contains "$out" "--config" "help documents --config"
 rc=0
 err=$("$MAINT" verify --config ../maint.conf.example 2>&1) || rc=$?
 assert_contains "$err" "set backup_root in ../maint.conf.example" "maint.conf.example parses and leaves backup_root unset"
-for key in distro backup_root keep docker_guard_extra docker_named_volumes pw_scan_roots_extra; do
+for key in distro backup_root keep winclean_age winclean_extra docker_guard_extra docker_named_volumes pw_scan_roots_extra; do
   assert_ok "grep -q '^$key =' ../maint.conf.example" "maint.conf.example lists $key"
 done
 

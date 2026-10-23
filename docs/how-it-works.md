@@ -323,7 +323,30 @@ sharing violation. No data is damaged; close Docker Desktop and retry.
 ### Other verbs
 
 - `winclean`: `%TEMP%`, `%LOCALAPPDATA%\Temp` (deduplicated when they coincide) and the
-  Recycle Bin, with free space on C: before and after.
+  Recycle Bin, with free space on C: before and after. Between the two it deletes app
+  junk under `%LOCALAPPDATA%`. This lives on the Windows side because the WSL clean
+  cannot reach it: `is_protected` refuses every `/mnt/<letter>`. The built-in patterns
+  are `*-updater\installer.exe` (electron-updater's cached installer, downloaded again
+  when the app needs it), `CrashDumps\*.dmp` and `*\*\CrashDumps\*.dmp` (e.g.
+  `TechSmith\Snagit\CrashDumps`). The owner's `winclean_extra` patterns are appended to
+  them and handled the same way; a file both match is handled once. Each pattern is
+  relative to `%LOCALAPPDATA%` and `\`-separated (`/` reads as `\`), and each segment is
+  matched against one folder level. Only `*` and `?` are wildcards; `[`, `]` and a
+  backtick match themselves, so `Foo[1]\*.dmp` finds a folder named `Foo[1]`.
+  `Get-MaintConfig` refuses a pattern with a drive (any `:`), a leading `\` (rooted or
+  UNC), a `..` segment or an empty one (`a||b`, `a\\b`, a trailing `\`) with
+  `file:line`, so a bad value stops the command before anything is deleted. The WSL
+  side accepts the key but does not check it. One age gate covers all of it: only
+  files untouched (LastWriteTime) for `winclean_age` days (default 14) qualify, so an
+  in-progress crash report or a fresh pending installer is kept and not even listed.
+  Only plain files are deleted, so no pattern empties a tree or leaves
+  `%LOCALAPPDATA%`. A directory that matches is skipped silently. A junction or
+  symlink that matches, and any file reached through one (a vendor folder moved to
+  another drive), is skipped with a warning. The walk lists one level at a time with
+  `-LiteralPath`, so a bracketed profile dir is never read as a wildcard. A file the
+  app holds open stays and is a warn line; the run goes on. The freed total counts
+  only files `Test-Path` no longer sees after the delete, never the pre-run sum.
+  `-DryRun` lists each match with its size, then a `would free:` total.
 - `defender`: adds Defender exclusions for the vhdx files and WSL/Docker processes
   (`wslservice.exe`, `com.docker.backend.exe` and others), which speeds up I/O
   noticeably. Processes are excluded by full image path, resolved at run time from

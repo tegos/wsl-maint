@@ -10,7 +10,7 @@ set -uo pipefail
 
 # Every key either half reads. The bash half only uses some of them, but an
 # unknown key is an error here, so a key valid on Windows must be valid here.
-CONFIG_KEYS="distro backup_root keep docker_guard_extra docker_named_volumes pw_scan_roots_extra"
+CONFIG_KEYS="distro backup_root keep winclean_age winclean_extra docker_guard_extra docker_named_volumes pw_scan_roots_extra"
 
 # Defaults, overwritten by config_load. CFG_CONFIG_FILE is the file the values
 # came from (shown in messages that ask the user to set a key).
@@ -99,6 +99,23 @@ config_load() {
         fi
         CFG_KEEP="$((10#$digits))"
         ;;
+      winclean_age)
+        # Read by the Windows half only (winclean's age gate), validated here
+        # with the same rule and message as Common.ps1: the keep check with a
+        # range of 1 to 3650 days, so a bad value stops both halves alike.
+        local age
+        case "$value" in
+          *[!0-9]*) age="" ;;
+          *) age="${value#"${value%%[!0]*}"}"; age="${age:-0}" ;;
+        esac
+        if [ -z "$age" ] || [ "${#age}" -gt 4 ] || [ "$((10#$age))" -lt 1 ] || [ "$((10#$age))" -gt 3650 ]; then
+          log_err "$file:$n: winclean_age must be a whole number from 1 to 3650, got: $value"
+          return 2
+        fi
+        ;;
+      # Read and validated by the Windows half only (winclean's owner patterns,
+      # Common.ps1); known here so a file that sets it serves both halves.
+      winclean_extra) ;;
       docker_guard_extra)
         # A broken pattern would make every guard grep fail, which reads as
         # "nothing guarded" in one place and "nothing to list" in another.

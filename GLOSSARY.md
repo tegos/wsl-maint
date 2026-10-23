@@ -9,3 +9,4 @@ Terms for how the cleaner decides what to delete and how it reports what it free
 - **Estimate**: bytes a rule would free, measured before anything is deleted. What `audit` and `clean --dry-run` report.
 - **Freed**: bytes a rule actually reclaimed, measured after it ran. Never an estimate; a refused or half-deleted target counts only what left the disk.
 - **Rule run**: one rule planned (targets enumerated and sized once) and then applied, yielding both its estimate and what it freed.
+- **App junk**: files apps leave under `%LOCALAPPDATA%` and recreate when needed (crash dumps, cached updater installers). `winclean` deletes the ones matching its patterns and untouched for `winclean_age` days; files only, never through a junction.

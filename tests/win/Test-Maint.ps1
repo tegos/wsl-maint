@@ -65,8 +65,8 @@ function Invoke-MaintCompact {
 
 $wincleanStub = @'
 function Invoke-MaintWinClean {
-    param([switch]$DryRun)
-    Add-Content -Path $env:MAINT_TEST_MARKER -Value "winclean dry=$DryRun"
+    [CmdletBinding()] param([Parameter(Mandatory)][hashtable]$Config, [switch]$DryRun)
+    Add-Content -Path $env:MAINT_TEST_MARKER -Value "winclean dry=$DryRun age=$($Config.WinCleanAge)"
     if ($env:MAINT_TEST_THROW -eq 'winclean') { throw 'BOOM-WINCLEAN' }
 }
 '@
@@ -355,6 +355,16 @@ function Test-BackupVerbIsWetByDefault {
     Assert-Contains $dry.Marker 'backup dry=True' '-DryRun still reaches the backup'
 }
 
+# winclean's age gate comes from maint.conf, so the dispatcher must hand it
+# the loaded config.
+function Test-WincleanGetsTheLoadedConfig {
+    $r = Invoke-MaintSandbox -Arguments @('winclean', '-DryRun') -ConfLines @('winclean_age = 30')
+    Assert-Eq 0 $r.ExitCode 'winclean -DryRun exits 0'
+    Assert-Contains $r.Marker 'winclean dry=True age=30' 'winclean gets -DryRun and winclean_age from maint.conf'
+    $r = Invoke-MaintSandbox -Arguments @('winclean')
+    Assert-Contains $r.Marker 'winclean dry=False age=14' 'without maint.conf winclean gets the default 14'
+}
+
 # --- Dispatcher --------------------------------------------------------------
 function Test-DefaultCommandIsHelpAndIsHarmless {
     $r = Invoke-MaintSandbox -Arguments @()
@@ -550,6 +560,7 @@ Test-CleanProxyForwardsDryRunOnlyWhenAsked
 Test-DockerProxyForwardsDryRun
 Test-FullDoesNotPruneDocker
 Test-BackupVerbIsWetByDefault
+Test-WincleanGetsTheLoadedConfig
 Test-DefaultCommandIsHelpAndIsHarmless
 Test-UnknownCommandIsRejectedWithoutSideEffects
 Test-UnknownCommandOrSwitchPausesWithItsReason
