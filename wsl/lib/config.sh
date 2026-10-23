@@ -10,7 +10,7 @@ set -uo pipefail
 
 # Every key either half reads. The bash half only uses some of them, but an
 # unknown key is an error here, so a key valid on Windows must be valid here.
-CONFIG_KEYS="distro backup_root keep winclean_age docker_guard_extra docker_named_volumes pw_scan_roots_extra"
+CONFIG_KEYS="distro backup_root keep winclean_age winclean_extra docker_guard_extra docker_named_volumes pw_scan_roots_extra"
 
 # Defaults, overwritten by config_load. CFG_CONFIG_FILE is the file the values
 # came from (shown in messages that ask the user to set a key).
@@ -113,6 +113,9 @@ config_load() {
           return 2
         fi
         ;;
+      # Read and validated by the Windows half only (winclean's owner patterns,
+      # Common.ps1); known here so a file that sets it serves both halves.
+      winclean_extra) ;;
       docker_guard_extra)
         # A broken pattern would make every guard grep fail, which reads as
         # "nothing guarded" in one place and "nothing to list" in another.

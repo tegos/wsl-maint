@@ -326,8 +326,14 @@ sharing violation. No data is damaged; close Docker Desktop and retry.
   Recycle Bin, with free space on C: before and after. Between the two it deletes app
   junk under `%LOCALAPPDATA%`: `*-updater\installer.exe` (electron-updater's cached
   installer, downloaded again when the app needs it), `CrashDumps\*.dmp` and
-  `*\*\CrashDumps\*.dmp` (e.g. `TechSmith\Snagit\CrashDumps`). The WSL side cannot do
-  this, `is_protected` refuses every `/mnt/<letter>`. One age gate for all of it:
+  `*\*\CrashDumps\*.dmp` (e.g. `TechSmith\Snagit\CrashDumps`), plus the owner's
+  `winclean_extra` patterns, appended to the list and handled the same way (a file
+  both match is handled once). Each pattern is relative to `%LOCALAPPDATA%`,
+  `\`-separated (`/` reads as `\`), one wildcard per folder level. `Get-MaintConfig`
+  refuses a pattern with a drive (any `:`), a leading `\` (rooted or UNC), a `..`
+  segment or an empty one (`a||b`, `a\\b`, a trailing `\`) with `file:line`, so a bad
+  value stops the command before anything is deleted; the WSL side only knows the
+  key. The WSL side cannot do this, `is_protected` refuses every `/mnt/<letter>`. One age gate for all of it:
   only files untouched (LastWriteTime) for `winclean_age` days (default 14) qualify,
   so an in-progress crash report or a fresh pending installer is kept and not even
   listed. Only plain files are deleted: a directory or a junction that matches, and

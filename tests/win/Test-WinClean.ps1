@@ -76,7 +76,7 @@ function New-JunkFile {
 }
 
 function Invoke-WinCleanScenario {
-    param([string]$TempDir, [string]$LocalAppData, [switch]$DryRun, [string]$Locked, $RecycleError, [int]$Age = 14)
+    param([string]$TempDir, [string]$LocalAppData, [switch]$DryRun, [string]$Locked, $RecycleError, [int]$Age = 14, [string[]]$Extra = @())
     $script:Removed = @()
     $script:RecycleBinCleared = 0
     $script:Logs = @()
@@ -88,7 +88,7 @@ function Invoke-WinCleanScenario {
     $env:TEMP = $TempDir
     $env:LOCALAPPDATA = $LocalAppData
     $err = $null
-    try { Invoke-MaintWinClean -Config @{ WinCleanAge = $Age } -DryRun:$DryRun } catch { $err = "$_" } finally {
+    try { Invoke-MaintWinClean -Config @{ WinCleanAge = $Age; WinCleanExtra = $Extra } -DryRun:$DryRun } catch { $err = "$_" } finally {
         $env:TEMP = $oldTemp
         $env:LOCALAPPDATA = $oldLad
         $script:LockedPattern = $null
@@ -463,6 +463,66 @@ function Test-AppJunkUnderABracketedLocalAppDataIsMatchedLiterally {
     } finally { Remove-TestDir $root }
 }
 
+# winclean_extra: owner patterns go through the same walk and the same gates
+# as the built-in ones: listed in -DryRun with their size, deleted on a real
+# run, kept while younger than winclean_age.
+function Test-AppJunkExtraPatternIsListedAndDeletedLikeTheBuiltIns {
+    $lad = New-TestDir 'winclean-lad'
+    $old = New-JunkFile $lad 'TechSmith\Updater\Installers\snagit.exe' -Bytes 3MB -AgeDays 400
+    $fresh = New-JunkFile $lad 'TechSmith\Updater\Installers\snagit-new.exe' -AgeDays 2
+    $cache = New-JunkFile $lad 'Acme\Tool\Cache\blob.bin' -Bytes 1MB
+    $dump = New-JunkFile $lad 'CrashDumps\app.dmp' -Bytes 1MB
+    $other = New-JunkFile $lad 'TechSmith\Snagit\DataStore\library.db'
+    $extra = @('TechSmith\Updater\Installers\*.exe', 'Acme\*\Cache\*', 'CrashDumps\*.dmp')
+    try {
+        $r = Invoke-WinCleanScenario -TempDir (Join-Path $lad 'no-such-dir') -LocalAppData $lad -DryRun -Extra $extra
+        Assert-Null $r.Error '-DryRun with extra patterns does not throw'
+        Assert-Eq 0 $r.Removed.Count '-DryRun deletes nothing'
+        Assert-Contains $r.Log "DRY would delete $old (3.0 MB)" 'an extra-pattern match is listed with its size'
+        Assert-Contains $r.Log "DRY would delete $cache (1.0 MB)" 'a wildcard segment in an extra pattern matches one level'
+        Assert-NotContains $r.Log 'snagit-new.exe' 'an extra-pattern match younger than winclean_age is not listed'
+        Assert-NotContains $r.Log 'library.db' 'a file no pattern names is not listed'
+        Assert-Eq 1 @($r.Log -split "`n" | Where-Object { $_ -like "*would delete $dump *" }).Count 'a file both lists match is listed once'
+        Assert-Contains $r.Log 'DRY app junk: 3 files, 5.0 MB' 'the total covers built-in and extra matches'
+
+        $r = Invoke-WinCleanScenario -TempDir (Join-Path $lad 'no-such-dir') -LocalAppData $lad -Extra $extra
+        Assert-Null $r.Error 'a real run with extra patterns does not throw'
+        Assert-FileMissing $old 'the old installer is deleted'
+        Assert-FileMissing $cache 'the cache blob is deleted'
+        Assert-FileExists $fresh 'the fresh installer is kept'
+        Assert-FileExists $other 'a file no pattern names is kept'
+        Assert-Contains $r.Log "deleted $old (3.0 MB)" 'the deletion is logged with its size'
+        Assert-Contains $r.Log 'app junk: freed 5.0 MB (3 of 3 files)' 'the freed total counts extra matches'
+    } finally { Remove-TestDir $lad }
+}
+
+# The refusals hold for owner patterns too: a locked file is a warn line, a
+# directory match and anything reached through a junction are skipped.
+function Test-AppJunkExtraPatternKeepsTheRefusals {
+    $lad = New-TestDir 'winclean-lad'
+    $outside = New-TestDir 'winclean-outside'
+    $locked = New-JunkFile $lad 'Acme\Logs\big.log'
+    $inside = New-JunkFile $lad 'Acme\Logs\archive.log\keep.txt'
+    [IO.Directory]::SetLastWriteTime((Join-Path $lad 'Acme\Logs\archive.log'), (Get-Date).AddDays(-30))
+    $behind = New-JunkFile $outside 'Logs\moved.log'
+    try {
+        New-Item -ItemType Junction -Path (Join-Path $lad 'Moved') -Target $outside | Out-Null
+        $r = Invoke-WinCleanScenario -TempDir (Join-Path $lad 'no-such-dir') -LocalAppData $lad `
+            -Extra @('*\Logs\*.log') -Locked '*\Acme\Logs\big.log'
+
+        Assert-Null $r.Error 'refusals do not abort the run'
+        Assert-Eq 0 $r.Removed.Count 'nothing was removed'
+        Assert-FileExists $locked 'the locked file survives'
+        Assert-FileExists $inside 'the directory match and its content survive'
+        Assert-FileExists $behind 'the file behind the junction survives'
+        Assert-Contains $r.Log "[warn] $locked : not deleted (locked or in use)" 'the locked file is a warn line'
+        Assert-Contains $r.Log "[warn] skipped $(Join-Path $lad 'Acme\Logs\archive.log'): a directory, only files are deleted" 'the directory match is a warn line'
+        Assert-Contains $r.Log "[warn] skipped $(Join-Path $lad 'Moved\Logs\moved.log'): reached through a junction or symlink" 'the junction-reached match is a warn line'
+        Assert-Contains $r.Log 'app junk: freed 0.0 MB (0 of 1 files)' 'nothing is counted as freed'
+        Assert-Eq 1 $r.Recycled 'the run still goes on to the recycle bin'
+    } finally { Remove-TestDir $lad; Remove-TestDir $outside }
+}
+
 Test-DestructiveCmdletsAreShadowed
 Test-DryRunDeletesNothing
 Test-JunctionInTempIsRemovedAsALinkNotFollowed
@@ -482,5 +542,7 @@ Test-AppJunkNewerThanAgeIsKeptAndNotListed
 Test-AppJunkBehindAJunctionIsSkippedWithAWarn
 Test-AppJunkDirectoryOrJunctionMatchIsNeverDeleted
 Test-AppJunkUnderABracketedLocalAppDataIsMatchedLiterally
+Test-AppJunkExtraPatternIsListedAndDeletedLikeTheBuiltIns
+Test-AppJunkExtraPatternKeepsTheRefusals
 
 Write-AssertSummary

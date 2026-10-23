@@ -94,6 +94,7 @@ comments, parsed, never executed. An unknown key stops every command with `file:
 | `backup_root` | none | Windows directory for archives (`X:\...`); needed by `backup`, `full`, `maint verify` |
 | `keep` | `3` | archives retained (1 to 1000) |
 | `winclean_age` | `14` | days a file of app junk must be untouched before `winclean` deletes it (1 to 3650) |
+| `winclean_extra` | empty | extra app-junk patterns for `winclean`, `\|`-separated, relative to `%LOCALAPPDATA%` |
 | `docker_guard_extra` | empty | extra volume name patterns never pruned, `\|`-separated regex |
 | `docker_named_volumes` | `no` | `yes` = `maint docker` prunes named dangling volumes too, like `--named-volumes` |
 | `pw_scan_roots_extra` | empty | extra dirs scanned for Playwright pins, `:`-separated |
@@ -102,7 +103,10 @@ comments, parsed, never executed. An unknown key stops every command with `file:
 `myapp_cache`. It applies to named volumes, so set it before your first
 `maint docker --named-volumes --yes`. Put your project dirs in
 `pw_scan_roots_extra` so the browsers they pin are not treated as orphans. The
-Playwright rule is `auto=no` for that reason: it runs only with `--all`.
+Playwright rule is `auto=no` for that reason: it runs only with `--all`. In
+`winclean_extra` each `\`-separated segment is a wildcard for one folder level, e.g.
+`TechSmith\Updater\Installers\*.exe`; a drive, a leading `\`, a `..` or an empty
+segment is refused when the config loads.
 
 ## Usage
 
@@ -148,8 +152,9 @@ Only when you run the verb that does it:
   bin (`maint.bat winclean`).
 - App junk under `%LOCALAPPDATA%` untouched for `winclean_age` days (default 14), files
   only (`maint.bat winclean`): `*-updater\installer.exe` (electron-updater downloads it
-  again when needed), `CrashDumps\*.dmp` and `*\*\CrashDumps\*.dmp`. A file behind a
-  junction or symlink is skipped with a warning.
+  again when needed), `CrashDumps\*.dmp`, `*\*\CrashDumps\*.dmp` and your
+  `winclean_extra` patterns. A file behind a junction or symlink is skipped with a
+  warning.
 - This tool's own archives beyond the newest `keep`.
 
 Never: Docker images, named volumes without the opt-in, volumes matching the guard

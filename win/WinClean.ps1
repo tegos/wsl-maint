@@ -9,8 +9,9 @@
 #
 # Targets: the user TEMP dir and %LOCALAPPDATA%\Temp (the same directory
 # unless TEMP was redirected; both are named in README and the usage text),
-# files matching $script:AppJunkPatterns untouched for winclean_age days, plus
-# the recycle bin. SoftwareDistribution\Download and DISM component cleanup
+# files matching $script:AppJunkPatterns or the owner's winclean_extra
+# (validated by Get-MaintConfig) untouched for winclean_age days, plus the
+# recycle bin. SoftwareDistribution\Download and DISM component cleanup
 # are deliberately not included: admin-only, opt-in, never run.
 #
 # Files in use are skipped by -ErrorAction SilentlyContinue, matching the
@@ -45,7 +46,8 @@ function Remove-TempEntry {
 # -like wildcard matched against one directory level. Generic on purpose (the
 # repo is public): electron-updater's cached installer and crash dumps, the
 # Windows Error Reporting folder and the <vendor>\<app>\CrashDumps layout
-# (TechSmith\Snagit) some apps use.
+# (TechSmith\Snagit) some apps use. The owner's winclean_extra patterns are
+# appended to these and go through the same walk and gates.
 $script:AppJunkPatterns = @(
     '*-updater\installer.exe',
     'CrashDumps\*.dmp',
@@ -82,20 +84,20 @@ function Get-AppJunkMatch {
 }
 
 function Invoke-AppJunkClean {
-    # Files matching $script:AppJunkPatterns, untouched for $AgeDays. Only
+    # Files matching $Patterns, untouched for $AgeDays. Only
     # plain files are deleted: a directory, a link, or anything reached
     # through one is skipped with a warning, so no pattern can empty a tree or
     # reach outside %LOCALAPPDATA%. The walk only ever steps from a directory
     # to one of its listed children (Get-ChildItem returns no `..`), so a
     # reparse point is the one way out, and those are refused here.
-    param([Parameter(Mandatory)][int]$AgeDays, [switch]$DryRun)
+    param([Parameter(Mandatory)][string[]]$Patterns, [Parameter(Mandatory)][int]$AgeDays, [switch]$DryRun)
     if (-not $env:LOCALAPPDATA -or -not (Test-Path -LiteralPath $env:LOCALAPPDATA -PathType Container)) { return }
     $base = [IO.Path]::GetFullPath($env:LOCALAPPDATA).TrimEnd('\')
     $cutoff = (Get-Date).AddDays(-$AgeDays)
 
     $seen = @{}
     $files = @()
-    foreach ($pattern in $script:AppJunkPatterns) {
+    foreach ($pattern in $Patterns) {
         foreach ($m in @(Get-AppJunkMatch -Base $base -Pattern $pattern)) {
             $item = $m.Item
             if ($seen.ContainsKey($item.FullName)) { continue }
@@ -182,7 +184,10 @@ function Invoke-MaintWinClean {
         }
     }
 
-    Invoke-AppJunkClean -AgeDays $Config.WinCleanAge -DryRun:$DryRun
+    # A file both lists match is listed and deleted once (Invoke-AppJunkClean's $seen).
+    $patterns = @($script:AppJunkPatterns)
+    if ($Config.WinCleanExtra) { $patterns += @($Config.WinCleanExtra) }
+    Invoke-AppJunkClean -Patterns $patterns -AgeDays $Config.WinCleanAge -DryRun:$DryRun
 
     if ($DryRun) {
         Write-MaintLog -Message 'DRY would empty the recycle bin'

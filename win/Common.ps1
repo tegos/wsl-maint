@@ -13,6 +13,8 @@ function Get-MaintConfig {
         Keep       = 3
         # Days a file of app junk must be untouched before winclean deletes it.
         WinCleanAge = 14
+        # Owner app-junk patterns (winclean_extra), added to WinClean.ps1's own.
+        WinCleanExtra = @()
         RepoRoot   = $script:MaintRepoRoot
         # Full path of the WSL_MAINT_CONFIG file, $null for the repo-root one.
         # Get-MaintWslArgs hands it to wsl/maint, which would otherwise read
@@ -87,6 +89,24 @@ function Get-MaintConfig {
                         throw "${at}: winclean_age must be a whole number from 1 to 3650, got: $value"
                     }
                     $cfg.WinCleanAge = [int]$value
+                }
+            }
+            'winclean_extra' {
+                # Owner app-junk patterns, `|`-separated, each relative to
+                # %LOCALAPPDATA% like the built-in ones; what they match is
+                # deleted. So a drive, a leading `\` (rooted or UNC), a `..`
+                # segment or an empty one fails the load before winclean runs:
+                # only a path the walk can reach from %LOCALAPPDATA% is a
+                # pattern. `/` is read as `\`, and spaces around `|` dropped.
+                # wsl/lib/config.sh only knows the key.
+                if ($value -ne '') {
+                    $patterns = @($value -split '\|' | ForEach-Object { $_.Trim().Replace('/', '\') })
+                    foreach ($pat in $patterns) {
+                        if ($pat.Contains(':') -or @($pat -split '\\' | Where-Object { $_ -eq '' -or $_ -eq '..' }).Count -gt 0) {
+                            throw "${at}: winclean_extra patterns must be relative to %LOCALAPPDATA%, without a drive, a leading '\', a '..' or an empty segment, got: $value"
+                        }
+                    }
+                    $cfg.WinCleanExtra = $patterns
                 }
             }
             # Read by the WSL side only; accepted here so one file serves both.

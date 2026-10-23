@@ -17,6 +17,9 @@ keep = 3
 # Days a file must be untouched before `winclean` deletes it as app junk (crash dumps, cached updater installers under %LOCALAPPDATA%), 1 to 3650. Default: 14
 winclean_age = 14
 
+# Extra app-junk patterns for `winclean`, |-separated, each relative to %LOCALAPPDATA% (e.g. TechSmith\Updater\Installers\*.exe), added to the built-in *-updater\installer.exe|CrashDumps\*.dmp|*\*\CrashDumps\*.dmp. Each \-separated segment is a wildcard for one folder level; only files untouched for winclean_age days are deleted. A drive, a leading \, a .. or an empty segment is refused. Default: empty
+winclean_extra =
+
 # Extra Docker volume name patterns never pruned, |-separated, case-insensitive regex, added to the built-in db-data|db_data|mysql|_data|redis|postgres|pgdata|mongo|mariadb. Applies when docker_named_volumes = yes (or --named-volumes). Default: empty
 docker_guard_extra =
 
