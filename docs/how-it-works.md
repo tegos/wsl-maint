@@ -204,6 +204,9 @@ its path names no file) the Store package folder `*<distro>*` on `C:`
 (`compact` does not glob when the registry entry exists, so on a stale Store copy the two
 can disagree). Two matches are listed, not guessed between. "Used" comes
 from `df /`, so for a distro other than the running one it shows as unknown.
+"Slack" is file size minus used, an upper bound on what `compact` returns: Optimize-VHD
+frees only vhdx blocks that are entirely unused, and ext4 leaves free space scattered
+across partly used ones. On a 61 GB disk with 13 GB slack, one compact returned 4 GB.
 
 ### State
 

@@ -19,7 +19,7 @@ assert_eq "0" "$(docker_bytes 0B)" "zero"
 # --- space_vhdx_line ---
 head -c 4096 /dev/zero > "$TMP/fake.vhdx"
 out=$(space_vhdx_line Ubuntu "$TMP/*.vhdx" 1024)
-assert_contains "$out" "compact could return ~3.0K" "slack = file size - used"
+assert_contains "$out" "slack up to ~3.0K" "slack = file size - used"
 out=$(space_vhdx_line Ubuntu "$TMP/*.vhdx" 999999)
 assert_contains "$out" "~0.0" "used above file size never goes negative"
 out=$(space_vhdx_line Docker "$TMP/*.vhdx" "")
@@ -82,7 +82,7 @@ export WSL_MAINT_CONFIG="$TMP/maint.conf"
 rc=0
 out=$(../wsl/maint space 2>&1) || rc=$?
 assert_eq "0" "$rc" "maint space exits 0"
-assert_contains "$out" "compact could return" "report has the vhdx section"
+assert_contains "$out" "slack up to" "report has the vhdx section"
 assert_contains "$out" "big-db-data" "report reaches the docker section"
 assert_contains "$out" "Alpine " "vhdx line labelled with the running distro, not Ubuntu"
 
@@ -94,7 +94,7 @@ for rcs in "124 0" "1 0" "0 124" "124 124"; do
   rc=0
   out=$(DFF_RC="${rcs% *}" DF_RC="${rcs#* }" ../wsl/maint space 2>&1) || rc=$?
   assert_eq "0" "$rc" "maint space exits 0 when system df fails ($rcs)"
-  assert_contains "$out" "compact could return" "vhdx section survives a failed df ($rcs)"
+  assert_contains "$out" "slack up to" "vhdx section survives a failed df ($rcs)"
   assert_contains "$out" "big-db-data" "volumes table survives a failed df ($rcs)"
 done
 rc=0
@@ -147,7 +147,7 @@ export WSL_DISTRO_NAME=
 out=$(space_distro_line Debian 1024)
 assert_contains "$out" "Debian " "line labelled with the distro"
 assert_contains "$out" "8.0K" "imported distro on D: found through the registry"
-assert_contains "$out" "compact could return ~7.0K" "used vs registry disk"
+assert_contains "$out" "slack up to ~7.0K" "used vs registry disk"
 out=$(space_distro_line debian 1024)
 assert_contains "$out" "8.0K" "distro name matched case-insensitively, as on Windows"
 out=$(space_distro_line Ubuntu 1024)
@@ -170,7 +170,7 @@ assert_eq "0" "$rc" "two matches are reported, not fatal"
 assert_contains "$out" "more than one Debian disk" "two matches refused"
 assert_contains "$out" "$TMP/mnt/d/WSL/My Debian/ext4.vhdx" "first match listed"
 assert_contains "$out" "$TMP/mnt/c/Store/Ubuntu/LocalState/ext4.vhdx" "second match listed"
-assert_fails "echo \"\$out\" | grep -q 'compact could return'" "no size line on a guess"
+assert_fails "echo \"\$out\" | grep -q 'slack up to'" "no size line on a guess"
 
 # Registered, but the BasePath names no file (a non-ASCII profile path comes
 # through reg.exe in the console codepage, mangled): glob fallback.

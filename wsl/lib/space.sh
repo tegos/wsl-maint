@@ -154,7 +154,7 @@ space_file_line() {
     return 0
   fi
   slack=$(( size > used ? size - used : 0 ))
-  printf '%-8s %9s  used %9s  compact could return ~%s\n' \
+  printf '%-8s %9s  used %9s  slack up to ~%s\n' \
     "$label" "$(human "$size")" "$(human "$used")" "$(human "$slack")"
 }
 
@@ -221,7 +221,8 @@ space_run() {
   echo "== vhdx files (file size vs data inside)"
   space_distro_line "$(space_distro_name)" "$(df -B1 --output=used / | tail -1 | tr -d ' ')"
   space_vhdx_line Docker "$SPACE_DOCKER_VHDX_GLOB" "$docker_used"
-  echo "   (slack comes back only via maint.bat compact, from an admin prompt)"
+  echo "   (slack = file size - data, an upper bound: maint.bat compact, from an admin"
+  echo "    prompt, frees only blocks that are entirely unused and often returns much less)"
   echo
 
   space_top_dirs / 1
