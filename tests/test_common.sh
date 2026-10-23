@@ -100,10 +100,10 @@ assert_ok "is_protected \"$TMP/glob/projects/with-mem/memory/x.md\"" "globbed pa
 assert_ok "is_protected \"$TMP/glob/projects/with-mem\"" "parent of an EXISTING globbed match is refused"
 assert_ok "is_protected \"$TMP/glob/projects\"" "grandparent of an existing globbed match is refused"
 # ...and no wider than the data justifies: a project dir with no memory/ inside
-# has nothing protected to lose, so `--sessions` + an auto=no rule can still
+# has nothing protected to lose, so `--all` + an auto=no rule can still
 # prune it. Widening this to the pattern's whole literal prefix would refuse
 # every target under ~/.claude/projects and disable that documented flag.
-assert_fails "is_protected \"$TMP/glob/projects/without-mem\"" "sibling project with no memory/ stays deletable (--sessions)"
+assert_fails "is_protected \"$TMP/glob/projects/without-mem\"" "sibling project with no memory/ stays deletable (--all)"
 assert_fails "is_protected \"$TMP/glob/projects-other\"" "prefix-sharing sibling of the glob root not protected"
 # A glob root with NO match anywhere under it protects only the ancestors of
 # its own literal text (~/.claude, ~/.claude/projects -- that is the older

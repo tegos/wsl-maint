@@ -105,7 +105,7 @@ done
 # Regression: these ran on plain `maint clean` (auto=yes) and hold state that a
 # stranger cannot get back: per-project MCP browser profiles (cookies, logins),
 # user-supplied EasyOCR models, the Hugging Face token, pinned puppeteer
-# browsers, an owner-only tool's cache. They must need --sessions. The
+# browsers, an owner-only tool's cache. They must need --all. The
 # Playwright cache joins them: a project outside the scan roots looks unpinned.
 # Under a fixture HOME: on the real one a cache dir that is a symlink would
 # be resolved to its target and the rows below would not match by name.

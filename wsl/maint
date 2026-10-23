@@ -46,7 +46,7 @@ commands:
 
 flags:
   --dry-run             print what would happen, change nothing
-  --sessions            also apply auto=no rules (state-holding caches, opt-in)
+  --all                 also apply auto=no rules (state-holding caches, opt-in)
   --if-stale <days>     clean/docker only: exit immediately unless the last run is
                         older than <days> (a trailing "d" is allowed: 7 and 7d are
                         the same); other commands record no last run and ignore it
@@ -71,7 +71,7 @@ CMD="${1:-help}"
 while [ $# -gt 0 ]; do
   case "$1" in
     --dry-run)  DRY_RUN=1; shift ;;
-    --sessions) INCLUDE_MANUAL=1; shift ;;
+    --all)      INCLUDE_MANUAL=1; shift ;;
     --yes)      ASSUME_YES=1; shift ;;
     --named-volumes) NAMED_VOLUMES=1; shift ;;
     --if-stale)
