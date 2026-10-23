@@ -14,6 +14,9 @@ backup_root =
 # Backup archives to keep; older <distro>_* archives in backup_root are deleted. Default: 3
 keep = 3
 
+# Days a file must be untouched before `winclean` deletes it as app junk (crash dumps, cached updater installers under %LOCALAPPDATA%), 1 to 3650. Default: 14
+winclean_age = 14
+
 # Extra Docker volume name patterns never pruned, |-separated, case-insensitive regex, added to the built-in db-data|db_data|mysql|_data|redis|postgres|pgdata|mongo|mariadb. Applies when docker_named_volumes = yes (or --named-volumes). Default: empty
 docker_guard_extra =
 

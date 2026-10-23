@@ -1,14 +1,17 @@
-# Windows-side cleanup: TEMP and recycle bin. Dot-sourced by maint.ps1.
+# Windows-side cleanup: TEMP, app junk in %LOCALAPPDATA% and the recycle bin.
+# Dot-sourced by maint.ps1.
 #
 # Every statement through the "N entries" log line is read-only
-# (Get-ChildItem/Test-Path). The -DryRun gate sits immediately before the
-# first side-effecting call in each block (Remove-Item, then Clear-RecycleBin);
-# nothing before those two gates deletes anything.
+# (Get-ChildItem/Test-Path), and so is the app-junk walk (Get-AppJunkMatch).
+# The -DryRun gate sits immediately before the first side-effecting call in
+# each block (Remove-Item for TEMP, Remove-Item for app junk, then
+# Clear-RecycleBin); nothing before those gates deletes anything.
 #
 # Targets: the user TEMP dir and %LOCALAPPDATA%\Temp (the same directory
 # unless TEMP was redirected; both are named in README and the usage text),
-# plus the recycle bin. SoftwareDistribution\Download and DISM component
-# cleanup are deliberately not included: admin-only, opt-in, never run.
+# files matching $script:AppJunkPatterns untouched for winclean_age days, plus
+# the recycle bin. SoftwareDistribution\Download and DISM component cleanup
+# are deliberately not included: admin-only, opt-in, never run.
 #
 # Files in use are skipped by -ErrorAction SilentlyContinue, matching the
 # behaviour of the del /q /f /s the old batch file used.
@@ -37,8 +40,118 @@ function Remove-TempEntry {
     Remove-Item -LiteralPath $Item.FullName -Force -ErrorAction SilentlyContinue
 }
 
+# App junk: files apps leave under %LOCALAPPDATA% and download again when
+# they need them. Relative to %LOCALAPPDATA%, `\`-separated, each segment a
+# -like wildcard matched against one directory level. Generic on purpose (the
+# repo is public): electron-updater's cached installer and crash dumps, the
+# Windows Error Reporting folder and the <vendor>\<app>\CrashDumps layout
+# (TechSmith\Snagit) some apps use.
+$script:AppJunkPatterns = @(
+    '*-updater\installer.exe',
+    'CrashDumps\*.dmp',
+    '*\*\CrashDumps\*.dmp'
+)
+
+function Get-AppJunkMatch {
+    # Read-only. Every entry under $Base matching $Pattern, as
+    # @{ Item; ViaLink }, ViaLink set when a directory on the way is a junction
+    # or symlink. Such directories are still walked, so what lies behind one is
+    # reported rather than silently missed; the caller refuses to delete it.
+    # Windows' own compatibility junctions in %LOCALAPPDATA% (Application Data,
+    # History, ...) deny listing, so they yield nothing and no noise.
+    # -LiteralPath for the walk and -like on each name: the base (a profile
+    # dir with brackets) is never read as a wildcard, only the pattern is.
+    param([Parameter(Mandatory)][string]$Base, [Parameter(Mandatory)][string]$Pattern)
+    $segments = @($Pattern -split '\\')
+    $level = @([pscustomobject]@{ Dir = $Base; ViaLink = $false })
+    for ($i = 0; $i -lt $segments.Count; $i++) {
+        $next = @()
+        foreach ($node in $level) {
+            foreach ($child in @(Get-ChildItem -LiteralPath $node.Dir -Force -ErrorAction SilentlyContinue)) {
+                if ($child.Name -notlike $segments[$i]) { continue }
+                if ($i -eq $segments.Count - 1) {
+                    [pscustomobject]@{ Item = $child; ViaLink = $node.ViaLink }
+                } elseif ($child.PSIsContainer) {
+                    $isLink = ($child.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0
+                    $next += [pscustomobject]@{ Dir = $child.FullName; ViaLink = ($node.ViaLink -or $isLink) }
+                }
+            }
+        }
+        $level = $next
+    }
+}
+
+function Invoke-AppJunkClean {
+    # Files matching $script:AppJunkPatterns, untouched for $AgeDays. Only
+    # plain files are deleted: a directory, a link, or anything reached
+    # through one is skipped with a warning, so no pattern can empty a tree or
+    # reach outside %LOCALAPPDATA%. The walk only ever steps from a directory
+    # to one of its listed children (Get-ChildItem returns no `..`), so a
+    # reparse point is the one way out, and those are refused here.
+    param([Parameter(Mandatory)][int]$AgeDays, [switch]$DryRun)
+    if (-not $env:LOCALAPPDATA -or -not (Test-Path -LiteralPath $env:LOCALAPPDATA -PathType Container)) { return }
+    $base = [IO.Path]::GetFullPath($env:LOCALAPPDATA).TrimEnd('\')
+    $cutoff = (Get-Date).AddDays(-$AgeDays)
+
+    $seen = @{}
+    $files = @()
+    foreach ($pattern in $script:AppJunkPatterns) {
+        foreach ($m in @(Get-AppJunkMatch -Base $base -Pattern $pattern)) {
+            $item = $m.Item
+            if ($seen.ContainsKey($item.FullName)) { continue }
+            $seen[$item.FullName] = $true
+            # A directory or junction is refused whatever its age: its
+            # LastWriteTime is the link's or the folder's own, not a sign of
+            # the content's, and it is never a delete candidate anyway.
+            $isLink = ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0
+            if ($item.PSIsContainer -and -not $isLink) {
+                Write-MaintLog -Level warn -Message "skipped $($item.FullName): a directory, only files are deleted"
+                continue
+            }
+            if (-not $item.PSIsContainer -and $item.LastWriteTime -ge $cutoff) { continue }
+            if ($isLink) {
+                Write-MaintLog -Level warn -Message "skipped $($item.FullName): a junction or symlink"
+                continue
+            }
+            if ($m.ViaLink) {
+                Write-MaintLog -Level warn -Message "skipped $($item.FullName): reached through a junction or symlink, may be outside %LOCALAPPDATA%"
+                continue
+            }
+            $files += $item
+        }
+    }
+
+    if ($DryRun) {
+        $total = 0L
+        foreach ($f in $files) {
+            $total += $f.Length
+            Write-MaintLog -Message "DRY would delete $($f.FullName) ($(Format-Mb $f.Length))"
+        }
+        Write-MaintLog -Message "DRY app junk: $($files.Count) files, $(Format-Mb $total)"
+        return
+    }
+
+    # SilentlyContinue: a file the app holds open must not abort the run. So
+    # the outcome is read back from the disk: a file Test-Path still sees was
+    # not deleted and its bytes are not freed (the clean_run lesson: never
+    # report the pre-run sum as reclaimed).
+    $freed = 0L
+    $gone = 0
+    foreach ($f in $files) {
+        Remove-Item -LiteralPath $f.FullName -Force -ErrorAction SilentlyContinue
+        if (Test-Path -LiteralPath $f.FullName) {
+            Write-MaintLog -Level warn -Message "$($f.FullName) : not deleted (locked or in use)"
+            continue
+        }
+        $freed += $f.Length
+        $gone++
+        Write-MaintLog -Message "deleted $($f.FullName) ($(Format-Mb $f.Length))"
+    }
+    Write-MaintLog -Message "app junk: freed $(Format-Mb $freed) ($gone of $($files.Count) files)"
+}
+
 function Invoke-MaintWinClean {
-    param([switch]$DryRun)
+    param([Parameter(Mandatory)][hashtable]$Config, [switch]$DryRun)
 
     $before = Get-FreeSpaceGb -DriveLetter 'C'
     Write-MaintLog -Message "C: free before: $before GB"
@@ -68,6 +181,8 @@ function Invoke-MaintWinClean {
             Write-MaintLog -Level warn -Message ("$t : " + $remaining.Count + " entries left (locked or in use)")
         }
     }
+
+    Invoke-AppJunkClean -AgeDays $Config.WinCleanAge -DryRun:$DryRun
 
     if ($DryRun) {
         Write-MaintLog -Message 'DRY would empty the recycle bin'

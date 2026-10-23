@@ -14,6 +14,9 @@ $ErrorActionPreference = 'Stop'
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repo = Split-Path -Parent (Split-Path -Parent $here)
 . (Join-Path $here 'Assert.ps1')
+# Common.ps1 for Format-Mb; its Write-MaintLog and Get-FreeSpaceGb are
+# shadowed below, after it, so the shadows win.
+. (Join-Path $repo 'win\Common.ps1')
 . (Join-Path $repo 'win\WinClean.ps1')
 
 $script:TempRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
@@ -61,8 +64,19 @@ function New-CleanSandbox {
     $d
 }
 
+# A file of $Bytes under $Root\$Rel, last written $AgeDays days ago.
+function New-JunkFile {
+    param([string]$Root, [string]$Rel, [long]$Bytes = 1MB, [int]$AgeDays = 30)
+    $p = Join-Path $Root $Rel
+    [IO.Directory]::CreateDirectory((Split-Path -Parent $p)) | Out-Null
+    $fs = [IO.File]::Create($p)
+    try { $fs.SetLength($Bytes) } finally { $fs.Dispose() }
+    [IO.File]::SetLastWriteTime($p, (Get-Date).AddDays(-$AgeDays))
+    $p
+}
+
 function Invoke-WinCleanScenario {
-    param([string]$TempDir, [string]$LocalAppData, [switch]$DryRun, [string]$Locked, $RecycleError)
+    param([string]$TempDir, [string]$LocalAppData, [switch]$DryRun, [string]$Locked, $RecycleError, [int]$Age = 14)
     $script:Removed = @()
     $script:RecycleBinCleared = 0
     $script:Logs = @()
@@ -74,7 +88,7 @@ function Invoke-WinCleanScenario {
     $env:TEMP = $TempDir
     $env:LOCALAPPDATA = $LocalAppData
     $err = $null
-    try { Invoke-MaintWinClean -DryRun:$DryRun } catch { $err = "$_" } finally {
+    try { Invoke-MaintWinClean -Config @{ WinCleanAge = $Age } -DryRun:$DryRun } catch { $err = "$_" } finally {
         $env:TEMP = $oldTemp
         $env:LOCALAPPDATA = $oldLad
         $script:LockedPattern = $null
@@ -300,6 +314,155 @@ function Test-JunctionInTempIsRemovedAsALinkNotFollowed {
     } finally { Remove-TestDir $t; Remove-TestDir $lad; Remove-TestDir $target }
 }
 
+# --- App junk in %LOCALAPPDATA% ----------------------------------------------
+# One match per built-in pattern, all older than the default 14 days.
+function New-AppJunkSandbox {
+    $lad = New-TestDir 'winclean-lad'
+    [pscustomobject]@{
+        Root      = $lad
+        Installer = New-JunkFile $lad 'obsidian-updater\installer.exe' -Bytes 1MB
+        Dump      = New-JunkFile $lad 'CrashDumps\app.exe.123.dmp' -Bytes 2MB
+        AppDump   = New-JunkFile $lad 'TechSmith\Snagit\CrashDumps\snagit.dmp' -Bytes 1MB
+    }
+}
+
+function Test-AppJunkDryRunListsEachMatchWithSizeAndDeletesNothing {
+    $j = New-AppJunkSandbox
+    try {
+        $r = Invoke-WinCleanScenario -TempDir (Join-Path $j.Root 'no-such-dir') -LocalAppData $j.Root -DryRun
+
+        Assert-Null $r.Error '-DryRun does not throw'
+        Assert-Eq 0 $r.Removed.Count '-DryRun deletes no app junk'
+        foreach ($f in $j.Installer, $j.Dump, $j.AppDump) { Assert-FileExists $f "still there: $f" }
+        Assert-Contains $r.Log "DRY would delete $($j.Installer) (1.0 MB)" 'the updater installer is listed with its size'
+        Assert-Contains $r.Log "DRY would delete $($j.Dump) (2.0 MB)" 'a top-level crash dump is listed with its size'
+        Assert-Contains $r.Log "DRY would delete $($j.AppDump) (1.0 MB)" 'an app crash dump is listed with its size'
+        Assert-Contains $r.Log 'DRY app junk: 3 files, 4.0 MB' 'the total is logged'
+    } finally { Remove-TestDir $j.Root }
+}
+
+function Test-AppJunkRealRunDeletesEveryMatch {
+    $j = New-AppJunkSandbox
+    try {
+        $r = Invoke-WinCleanScenario -TempDir (Join-Path $j.Root 'no-such-dir') -LocalAppData $j.Root
+
+        Assert-Null $r.Error 'a real run does not throw'
+        Assert-Eq 3 $r.Removed.Count 'each match went through Remove-Item'
+        foreach ($f in $j.Installer, $j.Dump, $j.AppDump) { Assert-FileMissing $f "deleted: $f" }
+        Assert-True (Test-Path -LiteralPath (Join-Path $j.Root 'TechSmith\Snagit\CrashDumps') -PathType Container) 'the folder holding a dump is left in place'
+        Assert-Contains $r.Log "deleted $($j.Dump) (2.0 MB)" 'each deletion is logged with its size'
+        Assert-Contains $r.Log 'app junk: freed 4.0 MB (3 of 3 files)' 'the freed total is logged'
+        Assert-NotContains $r.Log '[warn]' 'nothing was reported stuck'
+    } finally { Remove-TestDir $j.Root }
+}
+
+# Remove-Item runs with -ErrorAction SilentlyContinue, so a file an app holds
+# open is neither an error nor freed space: only what Test-Path no longer sees
+# counts, never the pre-run sum.
+function Test-AppJunkLockedFileIsAWarnAndNotCountedAsFreed {
+    $j = New-AppJunkSandbox
+    try {
+        $r = Invoke-WinCleanScenario -TempDir (Join-Path $j.Root 'no-such-dir') -LocalAppData $j.Root -Locked '*\CrashDumps\app.exe.123.dmp'
+
+        Assert-Null $r.Error 'a locked file does not abort the run'
+        Assert-FileExists $j.Dump 'the locked dump survives'
+        Assert-FileMissing $j.Installer 'the other matches are still deleted'
+        Assert-Contains $r.Log "[warn] $($j.Dump) : not deleted (locked or in use)" 'the locked file is a warn line'
+        Assert-NotContains $r.Log "deleted $($j.Dump)" 'the locked file is not logged as deleted'
+        Assert-Contains $r.Log 'app junk: freed 2.0 MB (2 of 3 files)' 'the 2 MB still on disk is not counted as freed'
+        Assert-Eq 1 $r.Recycled 'the run still goes on to the recycle bin'
+    } finally { Remove-TestDir $j.Root }
+}
+
+# An in-progress crash report or a pending update is recent: only files
+# untouched for winclean_age days are junk, and a fresh one is not even listed.
+function Test-AppJunkNewerThanAgeIsKeptAndNotListed {
+    $lad = New-TestDir 'winclean-lad'
+    $old = New-JunkFile $lad 'CrashDumps\old.dmp' -AgeDays 20
+    $fresh = New-JunkFile $lad 'CrashDumps\fresh.dmp' -AgeDays 5
+    $pending = New-JunkFile $lad 'ueli-updater\installer.exe' -AgeDays 0
+    try {
+        $r = Invoke-WinCleanScenario -TempDir (Join-Path $lad 'no-such-dir') -LocalAppData $lad -DryRun
+        Assert-Contains $r.Log "DRY would delete $old" 'a dump older than 14 days is listed'
+        Assert-NotContains $r.Log 'fresh.dmp' 'a dump younger than 14 days is not listed'
+        Assert-NotContains $r.Log 'ueli-updater' 'an installer written today is not listed'
+
+        $r = Invoke-WinCleanScenario -TempDir (Join-Path $lad 'no-such-dir') -LocalAppData $lad
+        Assert-FileMissing $old 'the old dump is deleted'
+        Assert-FileExists $fresh 'the fresh dump is kept'
+        Assert-FileExists $pending 'the fresh installer is kept'
+        Assert-Contains $r.Log 'app junk: freed 1.0 MB (1 of 1 files)' 'kept files are not part of the count'
+
+        # The gate is winclean_age, not a constant.
+        $r = Invoke-WinCleanScenario -TempDir (Join-Path $lad 'no-such-dir') -LocalAppData $lad -DryRun -Age 3
+        Assert-Contains $r.Log "DRY would delete $fresh" 'winclean_age = 3 lists a 5-day-old dump'
+        Assert-NotContains $r.Log 'ueli-updater' 'winclean_age = 3 still keeps a file written today'
+    } finally { Remove-TestDir $lad }
+}
+
+# A vendor folder moved to another drive and linked back is the realistic
+# case: the dump behind the junction lies outside %LOCALAPPDATA%, so it is
+# reported, never deleted. Junctions need no privilege, unlike symlinks.
+function Test-AppJunkBehindAJunctionIsSkippedWithAWarn {
+    $lad = New-TestDir 'winclean-lad'
+    $outside = New-TestDir 'winclean-outside'
+    $dump = New-JunkFile $outside 'CrashDumps\moved.dmp'
+    try {
+        New-Item -ItemType Directory -Path (Join-Path $lad 'Vendor') -Force | Out-Null
+        New-Item -ItemType Junction -Path (Join-Path $lad 'Vendor\App') -Target $outside | Out-Null
+        $seen = Join-Path $lad 'Vendor\App\CrashDumps\moved.dmp'
+
+        $r = Invoke-WinCleanScenario -TempDir (Join-Path $lad 'no-such-dir') -LocalAppData $lad
+
+        Assert-Null $r.Error 'a junction on the way does not throw'
+        Assert-FileExists $dump 'the dump behind the junction survives'
+        Assert-Eq 0 $r.Removed.Count 'nothing went through Remove-Item'
+        Assert-Contains $r.Log "[warn] skipped ${seen}: reached through a junction or symlink" 'the skip is a warn line naming the path'
+    } finally { Remove-TestDir $lad; Remove-TestDir $outside }
+}
+
+# The match itself a junction (named like a dump), or a real directory: only
+# files are deleted, so neither the link nor anything in or behind it goes.
+function Test-AppJunkDirectoryOrJunctionMatchIsNeverDeleted {
+    $lad = New-TestDir 'winclean-lad'
+    $outside = New-TestDir 'winclean-outside'
+    $behind = New-JunkFile $outside 'keep.txt'
+    $inside = New-JunkFile $lad 'CrashDumps\folder.dmp\keep.txt'
+    [IO.Directory]::SetLastWriteTime((Join-Path $lad 'CrashDumps\folder.dmp'), (Get-Date).AddDays(-30))
+    $link = Join-Path $lad 'CrashDumps\link.dmp'
+    try {
+        New-Item -ItemType Junction -Path $link -Target $outside | Out-Null
+
+        $r = Invoke-WinCleanScenario -TempDir (Join-Path $lad 'no-such-dir') -LocalAppData $lad
+
+        Assert-Null $r.Error 'a directory match does not throw'
+        Assert-Eq 0 $r.Removed.Count 'nothing went through Remove-Item'
+        Assert-FileExists $inside 'the directory match and its content survive'
+        Assert-True (Test-Path -LiteralPath $link) 'the junction match survives'
+        Assert-FileExists $behind 'the file behind the junction survives'
+        Assert-Contains $r.Log "[warn] skipped $(Join-Path $lad 'CrashDumps\folder.dmp'): a directory, only files are deleted" 'the directory is a warn line'
+        Assert-Contains $r.Log "[warn] skipped ${link}: a junction or symlink" 'the junction is a warn line'
+        Assert-Contains $r.Log 'app junk: freed 0.0 MB (0 of 0 files)' 'nothing is counted'
+    } finally { Remove-TestDir $lad; Remove-TestDir $outside }
+}
+
+# The same bracket hazard as TEMP: a profile dir `Local [ab]` read as a
+# wildcard would walk the sibling `Local a` instead.
+function Test-AppJunkUnderABracketedLocalAppDataIsMatchedLiterally {
+    $root = New-TestDir 'winclean-brackets'
+    $lad = [IO.Directory]::CreateDirectory((Join-Path $root 'Local [ab]')).FullName
+    $sibling = [IO.Directory]::CreateDirectory((Join-Path $root 'Local a')).FullName
+    $mine = New-JunkFile $lad 'CrashDumps\mine.dmp'
+    $theirs = New-JunkFile $sibling 'CrashDumps\theirs.dmp'
+    try {
+        $r = Invoke-WinCleanScenario -TempDir (Join-Path $root 'no-such-dir') -LocalAppData $lad
+
+        Assert-FileMissing $mine 'the dump under the bracketed dir is deleted'
+        Assert-FileExists $theirs 'the sibling the wildcard matches is untouched'
+        Assert-Contains $r.Log 'app junk: freed 1.0 MB (1 of 1 files)' 'exactly one file counted'
+    } finally { Remove-TestDir $root }
+}
+
 Test-DestructiveCmdletsAreShadowed
 Test-DryRunDeletesNothing
 Test-JunctionInTempIsRemovedAsALinkNotFollowed
@@ -312,5 +475,12 @@ Test-AlreadyEmptyRecycleBinIsNotAWarning
 Test-EveryRecycleBinErrorIsClassified
 Test-AllAlreadyEmptyErrorsAreNotAWarning
 Test-BracketedTempIsClearedLiterallyNotItsWildcardSibling
+Test-AppJunkDryRunListsEachMatchWithSizeAndDeletesNothing
+Test-AppJunkRealRunDeletesEveryMatch
+Test-AppJunkLockedFileIsAWarnAndNotCountedAsFreed
+Test-AppJunkNewerThanAgeIsKeptAndNotListed
+Test-AppJunkBehindAJunctionIsSkippedWithAWarn
+Test-AppJunkDirectoryOrJunctionMatchIsNeverDeleted
+Test-AppJunkUnderABracketedLocalAppDataIsMatchedLiterally
 
 Write-AssertSummary

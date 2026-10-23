@@ -323,7 +323,21 @@ sharing violation. No data is damaged; close Docker Desktop and retry.
 ### Other verbs
 
 - `winclean`: `%TEMP%`, `%LOCALAPPDATA%\Temp` (deduplicated when they coincide) and the
-  Recycle Bin, with free space on C: before and after.
+  Recycle Bin, with free space on C: before and after. Between the two it deletes app
+  junk under `%LOCALAPPDATA%`: `*-updater\installer.exe` (electron-updater's cached
+  installer, downloaded again when the app needs it), `CrashDumps\*.dmp` and
+  `*\*\CrashDumps\*.dmp` (e.g. `TechSmith\Snagit\CrashDumps`). The WSL side cannot do
+  this, `is_protected` refuses every `/mnt/<letter>`. One age gate for all of it:
+  only files untouched (LastWriteTime) for `winclean_age` days (default 14) qualify,
+  so an in-progress crash report or a fresh pending installer is kept and not even
+  listed. Only plain files are deleted: a directory or a junction that matches, and
+  any file reached through a junction or symlink (a vendor folder moved to another
+  drive), is skipped with a warning, so no pattern empties a tree or leaves
+  `%LOCALAPPDATA%`. The walk lists one level at a time with `-LiteralPath`, so a
+  bracketed profile dir is never read as a wildcard. A file the app holds open stays
+  and is a warn line; the run goes on. The freed total counts only files `Test-Path`
+  no longer sees after the delete, never the pre-run sum. `-DryRun` lists each match
+  with its size and the total.
 - `defender`: adds Defender exclusions for the vhdx files and WSL/Docker processes
   (`wslservice.exe`, `com.docker.backend.exe` and others), which speeds up I/O
   noticeably. Processes are excluded by full image path, resolved at run time from

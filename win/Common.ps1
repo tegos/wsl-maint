@@ -11,6 +11,8 @@ function Get-MaintConfig {
         Distro     = 'Ubuntu'
         BackupRoot = $null
         Keep       = 3
+        # Days a file of app junk must be untouched before winclean deletes it.
+        WinCleanAge = 14
         RepoRoot   = $script:MaintRepoRoot
         # Full path of the WSL_MAINT_CONFIG file, $null for the repo-root one.
         # Get-MaintWslArgs hands it to wsl/maint, which would otherwise read
@@ -72,6 +74,19 @@ function Get-MaintConfig {
                         throw "${at}: keep must be a whole number from 1 to 1000, got: $value"
                     }
                     $cfg.Keep = [int]$value
+                }
+            }
+            'winclean_age' {
+                # The age gate on what winclean deletes from %LOCALAPPDATA%: 0
+                # would take a crash report still being written. Checked like
+                # keep, length before the cast; wsl/lib/config.sh applies the
+                # same rule and message.
+                if ($value -ne '') {
+                    $digits = $value.TrimStart('0')
+                    if ($value -notmatch '^[0-9]+$' -or $digits.Length -gt 4 -or [int64]$value -lt 1 -or [int64]$value -gt 3650) {
+                        throw "${at}: winclean_age must be a whole number from 1 to 3650, got: $value"
+                    }
+                    $cfg.WinCleanAge = [int]$value
                 }
             }
             # Read by the WSL side only; accepted here so one file serves both.
@@ -253,6 +268,13 @@ function Format-Gb {
     # InvariantCulture and no grouping: the same "2048.00 GB" on any console,
     # so a size can be parsed back out of logs\maint-*.log.
     ($Bytes / 1GB).ToString('F2', [Globalization.CultureInfo]::InvariantCulture) + ' GB'
+}
+
+function Format-Mb {
+    # Format-Gb's rule at MB scale, for winclean's app junk: a crash dump of a
+    # few MB would read as 0.00 GB.
+    param([Parameter(Mandatory)][long]$Bytes)
+    ($Bytes / 1MB).ToString('F1', [Globalization.CultureInfo]::InvariantCulture) + ' MB'
 }
 
 function Test-MaintConsent {

@@ -78,15 +78,18 @@ function Test-GetMaintConfigDefaults {
     Assert-Eq 'Ubuntu' $cfg.Distro 'distro name'
     Assert-Null $cfg.BackupRoot 'no backup root without a config'
     Assert-Eq 3 $cfg.Keep 'retention count'
+    Assert-Eq 14 $cfg.WinCleanAge 'winclean app junk age'
 }
 
 function Test-GetMaintConfigReadsEachKey {
-    Invoke-WithConfig -Lines @('distro = Debian', 'backup_root = E:\wsl backups\deb', 'keep = 5') -Script {
+    Invoke-WithConfig -Lines @('distro = Debian', 'backup_root = E:\wsl backups\deb', 'keep = 5', 'winclean_age = 30') -Script {
         $cfg = Get-MaintConfig
         Assert-Eq 'Debian' $cfg.Distro 'distro comes from the file'
         Assert-Eq 'E:\wsl backups\deb' $cfg.BackupRoot 'backup_root keeps its backslashes and spaces'
         Assert-Eq 5 $cfg.Keep 'keep comes from the file'
         Assert-True ($cfg.Keep -is [int]) 'keep is a number, not the string "5"'
+        Assert-Eq 30 $cfg.WinCleanAge 'winclean_age comes from the file'
+        Assert-True ($cfg.WinCleanAge -is [int]) 'winclean_age is a number'
     }
 }
 
@@ -99,6 +102,7 @@ function Test-GetMaintConfigValueSemantics {
         '   # indented comment',
         'distro =',
         'keep = ',
+        'winclean_age =',
         'docker_guard_extra = myapp|otherapp',
         'docker_named_volumes = yes',
         'pw_scan_roots_extra = /mnt/d/src:/home/me/x',
@@ -110,6 +114,7 @@ function Test-GetMaintConfigValueSemantics {
         $cfg = Get-MaintConfig
         Assert-Eq 'Ubuntu' $cfg.Distro 'an empty distro means the default'
         Assert-Eq 3 $cfg.Keep 'an empty keep means the default'
+        Assert-Eq 14 $cfg.WinCleanAge 'an empty winclean_age means the default'
         Assert-Eq ('D:\b$(New-Item -ItemType File -Path ''' + $canary + ''')#not-a-comment') $cfg.BackupRoot 'the value is kept verbatim'
         Assert-FileMissing $canary 'the $(...) in a value was never executed'
     }
@@ -169,6 +174,20 @@ function Test-GetMaintConfigRejectsBadValues {
     }
     Invoke-WithConfig -Lines @('keep = 01000') -Script {
         Assert-Eq 1000 (Get-MaintConfig).Keep 'leading zeros are fine, as on the bash side'
+    }
+    # winclean_age gates what winclean deletes: 0 would take a crash report
+    # still being written. Same rule and message as wsl/lib/config.sh.
+    foreach ($bad in @('0', 'abc', '3651', '-1', '2.5', '99999999999999999999999')) {
+        Invoke-WithConfig -Lines @("winclean_age = $bad") -Script {
+            param($file)
+            Assert-Contains "$(Get-ConfigError)" "${file}:1: winclean_age must be a whole number from 1 to 3650, got: $bad" "rejected: winclean_age = $bad"
+        }
+    }
+    Invoke-WithConfig -Lines @('winclean_age = 03650') -Script {
+        Assert-Eq 3650 (Get-MaintConfig).WinCleanAge 'winclean_age = 3650 (leading zero) is accepted'
+    }
+    Invoke-WithConfig -Lines @('winclean_age = 1') -Script {
+        Assert-Eq 1 (Get-MaintConfig).WinCleanAge 'winclean_age = 1 is accepted'
     }
 }
 
@@ -266,6 +285,20 @@ function Test-FormatGbRejectsNonNumeric {
     $err = $null
     try { Format-Gb 'not-a-number' | Out-Null } catch { $err = "$_" }
     Assert-NotNull $err 'a non-numeric byte count is rejected rather than silently formatted'
+}
+
+# Format-Mb: the same pin, at the scale of a crash dump.
+function Test-FormatMbIsCultureInvariant {
+    $prev = [Threading.Thread]::CurrentThread.CurrentCulture
+    [Threading.Thread]::CurrentThread.CurrentCulture = [Globalization.CultureInfo]::GetCultureInfo('uk-UA')
+    try {
+        Assert-Eq '0.0 MB' (Format-Mb 0) 'zero'
+        Assert-Eq '1.5 MB' (Format-Mb 1572864) 'one and a half, with a decimal point'
+        Assert-Eq '784.0 MB' (Format-Mb 822083584) 'a realistic dump size'
+        Assert-Eq '20480.0 MB' (Format-Mb 21474836480) 'no grouping separator'
+    } finally {
+        [Threading.Thread]::CurrentThread.CurrentCulture = $prev
+    }
 }
 
 # --- Invoke-Wsl --------------------------------------------------------------
@@ -499,6 +532,7 @@ try {
     Test-GetFreeSpaceGbRoundsToTwoDecimals
     Test-FormatGbIsCultureInvariant
     Test-FormatGbRejectsNonNumeric
+Test-FormatMbIsCultureInvariant
     Test-InvokeWslPassesArgumentsAndSucceedsOnExitZero
     Test-InvokeWslThrowsOnNonZeroExit
     Test-WriteMaintLogFormatAndFile
