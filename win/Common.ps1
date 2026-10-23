@@ -8,14 +8,14 @@ function Get-MaintConfig {
     # value taken literally after trimming. Nothing in it is ever evaluated.
     # The WSL side (wsl/lib) parses the same file with the same rules.
     $cfg = @{
-        Distro     = 'Ubuntu'
-        BackupRoot = $null
-        Keep       = 3
+        Distro         = 'Ubuntu'
+        BackupRoot     = $null
+        Keep           = 3
         # Days a file of app junk must be untouched before winclean deletes it.
-        WinCleanAge = 14
+        WinCleanAge    = 14
         # Owner app-junk patterns (winclean_extra), added to WinClean.ps1's own.
-        WinCleanExtra = @()
-        RepoRoot   = $script:MaintRepoRoot
+        WinCleanExtra  = @()
+        RepoRoot       = $script:MaintRepoRoot
         # Full path of the WSL_MAINT_CONFIG file, $null for the repo-root one.
         # Get-MaintWslArgs hands it to wsl/maint, which would otherwise read
         # the repo-root file and miss e.g. docker_guard_extra.

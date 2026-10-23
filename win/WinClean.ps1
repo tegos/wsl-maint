@@ -17,6 +17,13 @@
 # Files in use are skipped by -ErrorAction SilentlyContinue, matching the
 # behaviour of the del /q /f /s the old batch file used.
 
+function Test-ReparsePoint {
+    # A junction, a directory symlink or a file symlink: the one way a walk
+    # that only steps into listed children can leave the tree it started in.
+    param([Parameter(Mandatory)]$Item)
+    ($Item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0
+}
+
 function Remove-TempEntry {
     # Windows PowerShell 5.1's Remove-Item -Recurse walks INTO a junction or
     # directory symlink and deletes the TARGET's contents (fixed in PowerShell
@@ -28,7 +35,7 @@ function Remove-TempEntry {
     # too, and a directory that still holds something (a locked file) is left
     # for the re-count below to report.
     param([Parameter(Mandatory)]$Item)
-    if (($Item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+    if (Test-ReparsePoint $Item) {
         try { $Item.Delete() } catch { }
         return
     }
@@ -42,17 +49,27 @@ function Remove-TempEntry {
 }
 
 # App junk: files apps leave under %LOCALAPPDATA% and download again when
-# they need them. Relative to %LOCALAPPDATA%, `\`-separated, each segment a
-# -like wildcard matched against one directory level. Generic on purpose (the
-# repo is public): electron-updater's cached installer and crash dumps, the
-# Windows Error Reporting folder and the <vendor>\<app>\CrashDumps layout
-# (TechSmith\Snagit) some apps use. The owner's winclean_extra patterns are
+# they need them. Relative to %LOCALAPPDATA%, `\`-separated, each segment
+# matched against one directory level, with `*` and `?` the only wildcards
+# (ConvertTo-AppJunkWildcard). Generic on purpose (the repo is public):
+# electron-updater's cached installer and crash dumps, the Windows Error
+# Reporting folder and the <vendor>\<app>\CrashDumps layout (TechSmith\Snagit)
+# some apps use. The owner's winclean_extra patterns are
 # appended to these and go through the same walk and gates.
 $script:AppJunkPatterns = @(
     '*-updater\installer.exe',
     'CrashDumps\*.dmp',
     '*\*\CrashDumps\*.dmp'
 )
+
+function ConvertTo-AppJunkWildcard {
+    # One pattern segment as a -like pattern with only `*` and `?` live:
+    # backtick, `[` and `]` are escaped so they match themselves. -like would
+    # read `[...]` as a character class (so Foo[1] never matched a folder named
+    # Foo[1]) and throw on a lone `[`, at match time, after TEMP was emptied.
+    param([Parameter(Mandatory)][AllowEmptyString()][string]$Segment)
+    $Segment -replace '([`\[\]])', '`$1'
+}
 
 function Get-AppJunkMatch {
     # Read-only. Every entry under $Base matching $Pattern, as
@@ -62,9 +79,10 @@ function Get-AppJunkMatch {
     # Windows' own compatibility junctions in %LOCALAPPDATA% (Application Data,
     # History, ...) deny listing, so they yield nothing and no noise.
     # -LiteralPath for the walk and -like on each name: the base (a profile
-    # dir with brackets) is never read as a wildcard, only the pattern is.
+    # dir with brackets) is never read as a wildcard, only the pattern's `*`
+    # and `?` are.
     param([Parameter(Mandatory)][string]$Base, [Parameter(Mandatory)][string]$Pattern)
-    $segments = @($Pattern -split '\\')
+    $segments = @($Pattern -split '\\' | ForEach-Object { ConvertTo-AppJunkWildcard $_ })
     $level = @([pscustomobject]@{ Dir = $Base; ViaLink = $false })
     for ($i = 0; $i -lt $segments.Count; $i++) {
         $next = @()
@@ -74,8 +92,7 @@ function Get-AppJunkMatch {
                 if ($i -eq $segments.Count - 1) {
                     [pscustomobject]@{ Item = $child; ViaLink = $node.ViaLink }
                 } elseif ($child.PSIsContainer) {
-                    $isLink = ($child.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0
-                    $next += [pscustomobject]@{ Dir = $child.FullName; ViaLink = ($node.ViaLink -or $isLink) }
+                    $next += [pscustomobject]@{ Dir = $child.FullName; ViaLink = ($node.ViaLink -or (Test-ReparsePoint $child)) }
                 }
             }
         }
@@ -84,32 +101,31 @@ function Get-AppJunkMatch {
 }
 
 function Invoke-AppJunkClean {
-    # Files matching $Patterns, untouched for $AgeDays. Only
-    # plain files are deleted: a directory, a link, or anything reached
-    # through one is skipped with a warning, so no pattern can empty a tree or
-    # reach outside %LOCALAPPDATA%. The walk only ever steps from a directory
-    # to one of its listed children (Get-ChildItem returns no `..`), so a
-    # reparse point is the one way out, and those are refused here.
-    param([Parameter(Mandatory)][string[]]$Patterns, [Parameter(Mandatory)][int]$AgeDays, [switch]$DryRun)
-    if (-not $env:LOCALAPPDATA -or -not (Test-Path -LiteralPath $env:LOCALAPPDATA -PathType Container)) { return }
-    $base = [IO.Path]::GetFullPath($env:LOCALAPPDATA).TrimEnd('\')
+    # Files under $Base (%LOCALAPPDATA%) matching $Patterns, untouched for
+    # $AgeDays. Only plain files are deleted, so no pattern can empty a tree
+    # or reach outside $Base: a plain directory match is skipped silently (an
+    # owner pattern ending in `*` matches folders on every run, a warn each
+    # time would be noise), a link or a file reached through one is skipped
+    # with a warning. The walk only ever steps from a directory to one of its
+    # listed children (Get-ChildItem returns no `..`), so a reparse point is
+    # the one way out, and those are refused here.
+    param([Parameter(Mandatory)][AllowEmptyString()][string]$Base, [Parameter(Mandatory)][string[]]$Patterns, [Parameter(Mandatory)][int]$AgeDays, [switch]$DryRun)
+    if (-not $Base -or -not (Test-Path -LiteralPath $Base -PathType Container)) { return }
+    $Base = [IO.Path]::GetFullPath($Base).TrimEnd('\')
     $cutoff = (Get-Date).AddDays(-$AgeDays)
 
     $seen = @{}
     $files = @()
     foreach ($pattern in $Patterns) {
-        foreach ($m in @(Get-AppJunkMatch -Base $base -Pattern $pattern)) {
+        foreach ($m in @(Get-AppJunkMatch -Base $Base -Pattern $pattern)) {
             $item = $m.Item
             if ($seen.ContainsKey($item.FullName)) { continue }
             $seen[$item.FullName] = $true
             # A directory or junction is refused whatever its age: its
             # LastWriteTime is the link's or the folder's own, not a sign of
             # the content's, and it is never a delete candidate anyway.
-            $isLink = ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0
-            if ($item.PSIsContainer -and -not $isLink) {
-                Write-MaintLog -Level warn -Message "skipped $($item.FullName): a directory, only files are deleted"
-                continue
-            }
+            $isLink = Test-ReparsePoint $item
+            if ($item.PSIsContainer -and -not $isLink) { continue }
             if (-not $item.PSIsContainer -and $item.LastWriteTime -ge $cutoff) { continue }
             if ($isLink) {
                 Write-MaintLog -Level warn -Message "skipped $($item.FullName): a junction or symlink"
@@ -129,7 +145,7 @@ function Invoke-AppJunkClean {
             $total += $f.Length
             Write-MaintLog -Message "DRY would delete $($f.FullName) ($(Format-Mb $f.Length))"
         }
-        Write-MaintLog -Message "DRY app junk: $($files.Count) files, $(Format-Mb $total)"
+        Write-MaintLog -Message "DRY app junk would free: $(Format-Mb $total) ($($files.Count) files)"
         return
     }
 
@@ -187,7 +203,7 @@ function Invoke-MaintWinClean {
     # A file both lists match is listed and deleted once (Invoke-AppJunkClean's $seen).
     $patterns = @($script:AppJunkPatterns)
     if ($Config.WinCleanExtra) { $patterns += @($Config.WinCleanExtra) }
-    Invoke-AppJunkClean -Patterns $patterns -AgeDays $Config.WinCleanAge -DryRun:$DryRun
+    Invoke-AppJunkClean -Base $env:LOCALAPPDATA -Patterns $patterns -AgeDays $Config.WinCleanAge -DryRun:$DryRun
 
     if ($DryRun) {
         Write-MaintLog -Message 'DRY would empty the recycle bin'

@@ -337,7 +337,7 @@ function Test-AppJunkDryRunListsEachMatchWithSizeAndDeletesNothing {
         Assert-Contains $r.Log "DRY would delete $($j.Installer) (1.0 MB)" 'the updater installer is listed with its size'
         Assert-Contains $r.Log "DRY would delete $($j.Dump) (2.0 MB)" 'a top-level crash dump is listed with its size'
         Assert-Contains $r.Log "DRY would delete $($j.AppDump) (1.0 MB)" 'an app crash dump is listed with its size'
-        Assert-Contains $r.Log 'DRY app junk: 3 files, 4.0 MB' 'the total is logged'
+        Assert-Contains $r.Log 'DRY app junk would free: 4.0 MB (3 files)' 'the total is an estimate, worded like the WSL side'
     } finally { Remove-TestDir $j.Root }
 }
 
@@ -423,6 +423,9 @@ function Test-AppJunkBehindAJunctionIsSkippedWithAWarn {
 
 # The match itself a junction (named like a dump), or a real directory: only
 # files are deleted, so neither the link nor anything in or behind it goes.
+# The junction is a warn line; a plain directory is skipped silently, since an
+# owner pattern ending in `*` matches folders on every run and a warn each time
+# would be noise.
 function Test-AppJunkDirectoryOrJunctionMatchIsNeverDeleted {
     $lad = New-TestDir 'winclean-lad'
     $outside = New-TestDir 'winclean-outside'
@@ -440,7 +443,7 @@ function Test-AppJunkDirectoryOrJunctionMatchIsNeverDeleted {
         Assert-FileExists $inside 'the directory match and its content survive'
         Assert-True (Test-Path -LiteralPath $link) 'the junction match survives'
         Assert-FileExists $behind 'the file behind the junction survives'
-        Assert-Contains $r.Log "[warn] skipped $(Join-Path $lad 'CrashDumps\folder.dmp'): a directory, only files are deleted" 'the directory is a warn line'
+        Assert-NotContains $r.Log 'folder.dmp' 'a plain directory match is skipped silently, no warn on every run'
         Assert-Contains $r.Log "[warn] skipped ${link}: a junction or symlink" 'the junction is a warn line'
         Assert-Contains $r.Log 'app junk: freed 0.0 MB (0 of 0 files)' 'nothing is counted'
     } finally { Remove-TestDir $lad; Remove-TestDir $outside }
@@ -483,7 +486,7 @@ function Test-AppJunkExtraPatternIsListedAndDeletedLikeTheBuiltIns {
         Assert-NotContains $r.Log 'snagit-new.exe' 'an extra-pattern match younger than winclean_age is not listed'
         Assert-NotContains $r.Log 'library.db' 'a file no pattern names is not listed'
         Assert-Eq 1 @($r.Log -split "`n" | Where-Object { $_ -like "*would delete $dump *" }).Count 'a file both lists match is listed once'
-        Assert-Contains $r.Log 'DRY app junk: 3 files, 5.0 MB' 'the total covers built-in and extra matches'
+        Assert-Contains $r.Log 'DRY app junk would free: 5.0 MB (3 files)' 'the total covers built-in and extra matches'
 
         $r = Invoke-WinCleanScenario -TempDir (Join-Path $lad 'no-such-dir') -LocalAppData $lad -Extra $extra
         Assert-Null $r.Error 'a real run with extra patterns does not throw'
@@ -497,7 +500,8 @@ function Test-AppJunkExtraPatternIsListedAndDeletedLikeTheBuiltIns {
 }
 
 # The refusals hold for owner patterns too: a locked file is a warn line, a
-# directory match and anything reached through a junction are skipped.
+# directory match is skipped silently and anything reached through a junction
+# is skipped with a warn.
 function Test-AppJunkExtraPatternKeepsTheRefusals {
     $lad = New-TestDir 'winclean-lad'
     $outside = New-TestDir 'winclean-outside'
@@ -516,11 +520,32 @@ function Test-AppJunkExtraPatternKeepsTheRefusals {
         Assert-FileExists $inside 'the directory match and its content survive'
         Assert-FileExists $behind 'the file behind the junction survives'
         Assert-Contains $r.Log "[warn] $locked : not deleted (locked or in use)" 'the locked file is a warn line'
-        Assert-Contains $r.Log "[warn] skipped $(Join-Path $lad 'Acme\Logs\archive.log'): a directory, only files are deleted" 'the directory match is a warn line'
+        Assert-NotContains $r.Log 'archive.log' 'the directory match is skipped silently'
         Assert-Contains $r.Log "[warn] skipped $(Join-Path $lad 'Moved\Logs\moved.log'): reached through a junction or symlink" 'the junction-reached match is a warn line'
         Assert-Contains $r.Log 'app junk: freed 0.0 MB (0 of 1 files)' 'nothing is counted as freed'
         Assert-Eq 1 $r.Recycled 'the run still goes on to the recycle bin'
     } finally { Remove-TestDir $lad; Remove-TestDir $outside }
+}
+
+# Only `*` and `?` are wildcards in a pattern segment. PS 5.1 -like also reads
+# `[...]` as a character class and throws on a lone `[`, which surfaced only
+# at match time, after TEMP was already emptied. Brackets are literal, so a
+# bracketed folder name is matched as written and an open `[` never throws.
+function Test-AppJunkBracketsInAPatternAreLiteral {
+    $lad = New-TestDir 'winclean-lad'
+    $open = New-JunkFile $lad 'Vendor[\a.dmp'
+    $pair = New-JunkFile $lad 'Foo[1]\a.dmp'
+    $notClass = New-JunkFile $lad 'Foo1\a.dmp'
+    try {
+        $r = Invoke-WinCleanScenario -TempDir (Join-Path $lad 'no-such-dir') -LocalAppData $lad `
+            -Extra @('Vendor[\*.dmp', 'Foo[1]\*.dmp')
+
+        Assert-Null $r.Error 'an open bracket in a pattern does not throw'
+        Assert-FileMissing $open 'Vendor[\*.dmp matches a real Vendor[ folder'
+        Assert-FileMissing $pair 'Foo[1]\*.dmp matches the folder named Foo[1]'
+        Assert-FileExists $notClass 'Foo[1] is not a character class matching Foo1'
+        Assert-Contains $r.Log 'app junk: freed 2.0 MB (2 of 2 files)' 'both bracketed matches are counted'
+    } finally { Remove-TestDir $lad }
 }
 
 Test-DestructiveCmdletsAreShadowed
@@ -544,5 +569,6 @@ Test-AppJunkDirectoryOrJunctionMatchIsNeverDeleted
 Test-AppJunkUnderABracketedLocalAppDataIsMatchedLiterally
 Test-AppJunkExtraPatternIsListedAndDeletedLikeTheBuiltIns
 Test-AppJunkExtraPatternKeepsTheRefusals
+Test-AppJunkBracketsInAPatternAreLiteral
 
 Write-AssertSummary

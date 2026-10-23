@@ -104,9 +104,10 @@ comments, parsed, never executed. An unknown key stops every command with `file:
 `maint docker --named-volumes --yes`. Put your project dirs in
 `pw_scan_roots_extra` so the browsers they pin are not treated as orphans. The
 Playwright rule is `auto=no` for that reason: it runs only with `--all`. In
-`winclean_extra` each `\`-separated segment is a wildcard for one folder level, e.g.
-`TechSmith\Updater\Installers\*.exe`; a drive, a leading `\`, a `..` or an empty
-segment is refused when the config loads.
+`winclean_extra` each `\`-separated segment matches one folder level, e.g.
+`TechSmith\Updater\Installers\*.exe`. Only `*` and `?` are wildcards (`[` and `]` are
+literal); a drive, a leading `\`, a `..` or an empty segment is refused when the
+config loads.
 
 ## Usage
 
