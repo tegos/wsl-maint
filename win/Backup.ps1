@@ -192,7 +192,9 @@ function New-BackupArchive {
 
     Write-MaintLog -Message '[4/6] compressing with zstd -T0 -3'
     $wslTar = ConvertTo-WslPath $TarPath
-    & wsl.exe -d $Distro -- zstd -T0 -3 --rm -q $wslTar
+    # --exec: the path comes from backup_root and must reach zstd as one argv
+    # entry, not through a Linux shell (see Get-MaintWslArgs).
+    Invoke-WslNoThrow @('-d', $Distro, '--exec', 'zstd', '-T0', '-3', '--rm', '-q', $wslTar)
     if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $zst)) {
         Write-MaintLog -Level err -Message 'compression failed; keeping the uncompressed tar'
         # A partial .zst zstd left behind has the shape retention counts.
@@ -225,7 +227,7 @@ function Test-BackupArchive {
     # side's `maint verify` runs; costs a few minutes on top of an already
     # ~20-minute operation, which is accepted.
     $wslZst = ConvertTo-WslPath $ArchivePath
-    & wsl.exe -d $Distro -- zstd -t $wslZst
+    Invoke-WslNoThrow @('-d', $Distro, '--exec', 'zstd', '-t', $wslZst)
     $verifyExit = $LASTEXITCODE
     if ($verifyExit -ne 0) {
         # A non-zero exit here is ambiguous, and the two readings mean opposite
@@ -243,7 +245,7 @@ function Test-BackupArchive {
         # Either way the archive is renamed out of retention's filter (see
         # Rename-FailedArchive), or the NEXT good run would rotate a good
         # backup out to keep this one.
-        & wsl.exe -d $Distro -- true
+        Invoke-WslNoThrow @('-d', $Distro, '--', 'true')
         if ($LASTEXITCODE -ne 0) {
             $moved = Rename-FailedArchive -Path $ArchivePath -Suffix '.unverified'
             throw "Integrity check could not be run on $ArchivePath -- $Distro did not respond (zstd -t exited $verifyExit, and so did a plain probe); the archive is UNVERIFIED, not known-bad, so keeping all existing backups. $($moved.Note) Re-check it later with: wsl -d $Distro -- zstd -t $(ConvertTo-WslPath $moved.Path) (maint verify only sees *.tar.zst), and rename it back to .tar.zst if it passes"
@@ -333,7 +335,7 @@ function Invoke-MaintBackup {
         Write-MaintLog -Message "DRY would check zstd in $distro"
     } else {
         # zstd must exist inside the distro before we produce a 20 GB tar we cannot compress.
-        & wsl.exe -d $distro -- sh -c "command -v zstd >/dev/null 2>&1"
+        Invoke-WslNoThrow @('-d', $distro, '--', 'sh', '-c', 'command -v zstd >/dev/null 2>&1')
         if ($LASTEXITCODE -ne 0) {
             throw "zstd is not installed in $distro. Run: wsl -d $distro -- sudo apt install -y zstd"
         }
@@ -361,7 +363,7 @@ function Invoke-MaintBackup {
     if ($DryRun) {
         Write-MaintLog -Message 'DRY would run: sudo -n fstrim --all'
     } else {
-        & wsl.exe -d $distro -- sudo -n fstrim --all
+        Invoke-WslNoThrow @('-d', $distro, '--', 'sudo', '-n', 'fstrim', '--all')
         if ($LASTEXITCODE -ne 0) {
             Write-MaintLog -Level warn -Message 'fstrim skipped (needs passwordless sudo)'
         }

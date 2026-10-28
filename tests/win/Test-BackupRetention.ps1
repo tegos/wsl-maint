@@ -302,6 +302,7 @@ function Invoke-ArchiveScenario {
     $tar = Join-Path $dir 'ubuntu_2026-09-01_0100.tar'
     $script:Removed = @()
     $script:Logs = @()
+    $script:WslCalls = @()
     function Invoke-Wsl {
         param([Parameter(Mandatory)][string[]]$Arguments)
         if ($ExportFails) {
@@ -312,6 +313,7 @@ function Invoke-ArchiveScenario {
     }
     function wsl.exe {
         [CmdletBinding()] param([Parameter(ValueFromRemainingArguments = $true)]$WslArgs)
+        $script:WslCalls += (@($WslArgs) -join ' ')
         $win = ConvertFrom-WslPathTest (@($WslArgs)[-1])
         # Unlike Invoke-BackupScenario, a .zst is written whenever it is not
         # suppressed, even on a non-zero exit: zstd can fail after creating its
@@ -331,6 +333,8 @@ function Invoke-ArchiveScenario {
         Removed = @($script:Removed)
         Files   = ((Get-ChildItem -LiteralPath $dir -File | Sort-Object Name | ForEach-Object { $_.Name }) -join ',')
         Log     = ($script:Logs -join "`n")
+        WslCalls = @($script:WslCalls)
+        Tar     = $tar
     }
 }
 
@@ -342,6 +346,9 @@ function Test-ArchiveUnitLeavesTheZstAndDropsTheTar {
         Assert-Contains $r.Log '[3/6] exporting to' 'the export step is logged'
         Assert-Contains $r.Log '[4/6] compressing with zstd -T0 -3' 'the compression step is logged'
         Assert-Contains $r.Log 'compressed to ' 'the compressed size is logged'
+        # --exec, not --: the backup_root-derived path must not pass through a
+        # Linux shell (audit #4, item 23).
+        Assert-Eq ('-d TestDistro --exec zstd -T0 -3 --rm -q ' + (ConvertTo-WslPath $r.Tar)) ($r.WslCalls -join ' | ') 'zstd is run with --exec, the path as its own argument'
     } finally { Remove-TestDir $r.Root }
 }
 
@@ -408,7 +415,7 @@ function Test-VerifyUnitPassesAGoodArchive {
     Assert-Null $r.Error 'zstd -t exit 0 does not throw'
     Assert-Contains $r.Log '[5/6] verifying the new archive with zstd -t' 'the step banner is logged'
     Assert-Contains $r.Log 'archive verified' 'success is logged'
-    Assert-Contains ($r.WslCalls -join ' | ') ('zstd -t ' + (ConvertTo-WslPath $r.Archive)) 'the WSL path of the archive is tested'
+    Assert-Contains ($r.WslCalls -join ' | ') ('-d TestDistro --exec zstd -t ' + (ConvertTo-WslPath $r.Archive)) 'the WSL path of the archive is tested, through --exec'
     Assert-Eq 1 $r.WslCalls.Count 'no liveness probe when the check passed'
     Assert-Eq 'ubuntu_x.tar.zst' $r.Files 'a verified archive keeps its name'
 }

@@ -226,7 +226,7 @@ function Test-FullForwardsSwitches {
 function Test-ProxyCommandsUseTheWslBinUnderTheRepo {
     $r = Invoke-MaintSandbox -Arguments @('audit')
     Assert-Eq 0 $r.ExitCode 'audit exits 0'
-    Assert-Match $r.Marker '(?m)^wsl -d Ubuntu -- /mnt/[a-z]/\S*/maint-sandbox-[0-9a-f]{12}/wsl/maint audit$' 'audit proxies to the repo''s own wsl/maint by absolute WSL path'
+    Assert-Match $r.Marker '(?m)^wsl -d Ubuntu --exec /mnt/[a-z]/\S*/maint-sandbox-[0-9a-f]{12}/wsl/maint audit$' 'audit proxies to the repo''s own wsl/maint by absolute WSL path'
     Assert-NotContains $r.Marker '/home/' 'no home-directory symlink is assumed'
     Assert-NotContains $r.Marker 'assert-admin' 'a proxy command needs no elevation'
 }
@@ -239,7 +239,7 @@ function Test-ConfiguredDistroReachesWslExeForEveryProxyVerb {
     foreach ($verb in @('audit', 'clean', 'docker')) {
         $r = Invoke-MaintSandbox -Arguments @($verb, '-DryRun') -ConfLines @('distro = Debian') -FakeDir $script:FakeDir
         Assert-Eq 0 $r.ExitCode "$verb exits 0 against the fake"
-        Assert-Match $r.FakeCalls "^-d Debian -- /mnt/[a-z]/\S*/wsl/maint $verb" "$verb reaches wsl.exe with the configured distro"
+        Assert-Match $r.FakeCalls "^-d Debian --exec /mnt/[a-z]/\S*/wsl/maint $verb" "$verb reaches wsl.exe with the configured distro"
         Assert-NotContains $r.FakeCalls 'Ubuntu' "$verb never falls back to the default distro"
     }
 }
@@ -251,7 +251,7 @@ function Test-ConfigOverrideVariableWinsOverRepoFile {
         $alt = Join-Path $dir 'alt.conf'
         Set-Content -LiteralPath $alt -Value 'distro = Alpine'
         $r = Invoke-MaintSandbox -Arguments @('audit') -ConfLines @('distro = Debian') -ConfigEnv $alt
-        Assert-Contains $r.Marker 'wsl -d Alpine -- ' 'the override file is the one read'
+        Assert-Contains $r.Marker 'wsl -d Alpine --exec ' 'the override file is the one read'
         Assert-NotContains $r.Marker 'Debian' 'the repo-root file is ignored when overridden'
     } finally { Remove-TestDir $dir }
 }
@@ -268,7 +268,7 @@ function Test-ConfigOverrideReachesTheWslSideForEveryProxyVerb {
         foreach ($verb in @('audit', 'clean', 'docker')) {
             $r = Invoke-MaintSandbox -Arguments @($verb, '-DryRun') -ConfLines @('distro = Debian') -ConfigEnv $alt
             Assert-Eq 0 $r.ExitCode "$verb exits 0 with an override"
-            Assert-Match $r.Marker "(?m)^wsl -d Alpine -- /mnt/[a-z]/\S*/wsl/maint $verb --config /mnt/[a-z]/\S*/maint-conf-[0-9a-f]{12}/alt\.conf( --dry-run)?$" "$verb hands the override to wsl/maint as a WSL path"
+            Assert-Match $r.Marker "(?m)^wsl -d Alpine --exec /mnt/[a-z]/\S*/wsl/maint $verb --config /mnt/[a-z]/\S*/maint-conf-[0-9a-f]{12}/alt\.conf( --dry-run)?$" "$verb hands the override to wsl/maint as a WSL path"
         }
         $plain = Invoke-MaintSandbox -Arguments @('docker') -ConfLines @('distro = Debian')
         Assert-NotContains $plain.Marker '--config' 'no override: wsl/maint finds the repo-root file itself'
@@ -289,7 +289,7 @@ function Test-MaintConfigSwitchSelectsTheOverrideAcrossTheUacRelaunch {
         foreach ($switch in @('-MaintConfig', '-M')) {
             $r = Invoke-MaintSandbox -Arguments @('audit', $switch, ('cfg:' + $alt)) -ConfLines @('distro = Debian')
             Assert-Eq 0 $r.ExitCode "audit $switch exits 0"
-            Assert-Match $r.Marker "(?m)^wsl -d Alpine -- /mnt/[a-z]/\S*/wsl/maint audit --config /mnt/[a-z]/\S*/alt\.conf$" "$switch selects the override and hands it to wsl/maint"
+            Assert-Match $r.Marker "(?m)^wsl -d Alpine --exec /mnt/[a-z]/\S*/wsl/maint audit --config /mnt/[a-z]/\S*/alt\.conf$" "$switch selects the override and hands it to wsl/maint"
         }
         $r = Invoke-MaintSandbox -Arguments @('backup', 'extra')
         Assert-Eq 1 $r.ExitCode 'a bare second positional is still refused'

@@ -118,11 +118,31 @@ function Test-PreviewCarriesTheConfigOverride {
     function Get-MaintConfig { @{ Distro = 'TestDistro'; BackupRoot = 'T:\nowhere'; Keep = 3; ConfigOverride = 'T:\conf\alt.conf' } }
     $r = Invoke-NativeConsentScenario -Lines @('out:would free: 10M')
     Assert-Null $r.Error 'the preview ran'
-    Assert-Match (Get-FakeExeCalls $script:FakeDir) '^-d TestDistro -- /mnt/\S+/wsl/maint clean --config /mnt/t/conf/alt\.conf --dry-run$' 'the override reaches the preview call'
+    Assert-Match (Get-FakeExeCalls $script:FakeDir) '^-d TestDistro --exec /mnt/\S+/wsl/maint clean --config /mnt/t/conf/alt\.conf --dry-run$' 'the override reaches the preview call'
+}
+
+# Invoke-WslNoThrow, used by the zstd, probe and fstrim calls in Backup.ps1:
+# stderr under 'Stop' with a redirect must not throw, the exit code must
+# survive in $LASTEXITCODE, and stdout must flow through (audit #4, item 14).
+function Test-WslNoThrowSurvivesStderrUnderStop {
+    $r = Invoke-WithFakeExe -Dir $script:FakeDir -Lines @('out:kept', 'err:[info] on stderr', 'exit:3') -Script {
+        $ErrorActionPreference = 'Stop'
+        $out = $null
+        $err = $null
+        $code = $null
+        try { $out = Invoke-WslNoThrow @('-d', 'X', '--exec', 'zstd', '-t', '/mnt/t/a.tar.zst') 2>&1; $code = $LASTEXITCODE } catch { $err = "$_" }
+        [pscustomobject]@{ Out = $out; Error = $err; Code = $code; Eap = $ErrorActionPreference }
+    }
+    Assert-Null $r.Error 'stderr from wsl.exe does not throw under Stop'
+    Assert-Eq 3 $r.Code 'the exit code survives in LASTEXITCODE'
+    Assert-Contains ($r.Out -join "`n") 'kept' 'stdout flows through'
+    Assert-Eq 'Stop' $r.Eap 'the caller''s ErrorActionPreference is restored'
+    Assert-Contains (Get-FakeExeCalls $script:FakeDir) '-d X --exec zstd -t /mnt/t/a.tar.zst' 'the fake recorded the call'
 }
 
 try {
     Test-FakeExeTriggersNativeCommandErrorUnderStop
+    Test-WslNoThrowSurvivesStderrUnderStop
     Test-ShadowedWslRefusesToRun
     Test-StderrDuringPreviewDoesNotThrow
     Test-FailingPreviewWithStderrReachesFailSafe

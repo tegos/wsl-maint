@@ -216,8 +216,11 @@ function Get-MaintWslArgs {
     # When the config came from WSL_MAINT_CONFIG, the same file goes along as
     # --config <WSL path>, so both halves read one file. A path WSL cannot
     # reach (UNC, relative) throws here rather than silently splitting them.
+    # --exec, not --: wsl.exe hands everything after -- to `$SHELL -c` as one
+    # string, so the repo path and the config path would reach a Linux shell
+    # unescaped. --exec runs the program directly with each argument as argv.
     param([Parameter(Mandatory)]$Config, [Parameter(Mandatory)][string]$Verb)
-    $wslArgs = @('-d', $Config.Distro, '--', (Get-MaintWslBin), $Verb)
+    $wslArgs = @('-d', $Config.Distro, '--exec', (Get-MaintWslBin), $Verb)
     if ($Config.ConfigOverride) {
         $wslArgs += @('--config', (ConvertTo-WslPath -WindowsPath $Config.ConfigOverride -What 'WSL_MAINT_CONFIG'))
     }
@@ -252,9 +255,11 @@ function Assert-Admin {
     }
 }
 
-function Invoke-Wsl {
-    param([Parameter(Mandatory)][string[]]$Arguments)
-    Write-MaintLog -Message ("wsl " + ($Arguments -join ' '))
+function Invoke-WslNoThrow {
+    # Runs wsl.exe and leaves its exit code in $LASTEXITCODE; never throws on
+    # its own. For the callers that read the exit code themselves (zstd, the
+    # liveness probe, fstrim); Invoke-Wsl below is the throwing variant.
+    #
     # 'Continue' for just the native call (pitfall 3 in docs/how-it-works.md).
     # Under 'Stop', PS 5.1 turns a wsl.exe stderr line into a terminating
     # NativeCommandError whenever it redirects the child's stderr: with 2>&1,
@@ -262,15 +267,22 @@ function Invoke-Wsl {
     # prompt or task running `maint.bat full -Unattended > log 2>&1`).
     # wsl/maint logs every [info] line to stderr, so the proxy verbs and
     # backup's clean step threw on the first line of a successful run there.
-    # The exit code decides, as it always did; output still flows through.
+    # The exit code decides; output still flows through.
+    param([Parameter(Mandatory)][string[]]$Arguments)
     $prevEap = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
     try {
         & wsl.exe @Arguments
-        $code = $LASTEXITCODE
     } finally {
         $ErrorActionPreference = $prevEap
     }
+}
+
+function Invoke-Wsl {
+    param([Parameter(Mandatory)][string[]]$Arguments)
+    Write-MaintLog -Message ("wsl " + ($Arguments -join ' '))
+    Invoke-WslNoThrow $Arguments
+    $code = $LASTEXITCODE
     if ($code -ne 0) {
         throw ("wsl exited " + $code + ": wsl " + ($Arguments -join ' '))
     }
