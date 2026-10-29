@@ -442,7 +442,7 @@ function Test-VerifyUnitReportsUnverifiedWhenDistroIsDown {
     Assert-NotContains "$($r.Error)" 'reports the archive as corrupt' 'no corruption verdict is invented'
     # maint verify globs *.tar.zst, so it cannot see the renamed file; the
     # hint must be a zstd -t on the new path.
-    Assert-Contains "$($r.Error)" ('zstd -t ' + (ConvertTo-WslPath "$($r.Archive).unverified")) 'the operator is told how to re-check the renamed file'
+    Assert-Contains "$($r.Error)" ('--exec zstd -t "' + (ConvertTo-WslPath "$($r.Archive).unverified") + '"') 'the operator is told how to re-check the renamed file, path quoted'
     Assert-Eq 'ubuntu_x.tar.zst.unverified' $r.Files 'an unverified archive is renamed to .unverified, not .bad'
     Assert-Contains "$($r.Error)" "moved to $($r.Archive).unverified" 'the throw names the renamed path'
     Assert-Contains $r.Log "renamed to $($r.Archive).unverified" 'the rename is logged'

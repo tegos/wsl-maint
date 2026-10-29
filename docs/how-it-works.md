@@ -407,7 +407,8 @@ replace `wsl.exe`, `Optimize-VHD`, `Read-Host` and similar with functions, which
 the logic (branches, order, what was deleted and what survived) but not native stream
 behaviour (stdout/stderr order, UTF-16LE). That is still checked by hand with `-DryRun`
 against the real binaries. The exception is pitfall 3, covered by
-`Test-BackupConsentNative.ps1`: it compiles a real console program
+`Test-BackupConsentNative.ps1` for the preview, `Invoke-WslNoThrow` and compact's
+`wsl -l --running -q` poll: it compiles a real console program
 (`tests/win/FakeExe.ps1`) and puts it first on `PATH` as `wsl.exe`.
 
 ## Building your own

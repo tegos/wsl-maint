@@ -248,7 +248,7 @@ function Test-BackupArchive {
         Invoke-WslNoThrow @('-d', $Distro, '--', 'true')
         if ($LASTEXITCODE -ne 0) {
             $moved = Rename-FailedArchive -Path $ArchivePath -Suffix '.unverified'
-            throw "Integrity check could not be run on $ArchivePath -- $Distro did not respond (zstd -t exited $verifyExit, and so did a plain probe); the archive is UNVERIFIED, not known-bad, so keeping all existing backups. $($moved.Note) Re-check it later with: wsl -d $Distro -- zstd -t $(ConvertTo-WslPath $moved.Path) (maint verify only sees *.tar.zst), and rename it back to .tar.zst if it passes"
+            throw "Integrity check could not be run on $ArchivePath -- $Distro did not respond (zstd -t exited $verifyExit, and so did a plain probe); the archive is UNVERIFIED, not known-bad, so keeping all existing backups. $($moved.Note) Re-check it later with: wsl -d $Distro --exec zstd -t `"$(ConvertTo-WslPath $moved.Path)`" (maint verify only sees *.tar.zst), and rename it back to .tar.zst if it passes"
         }
         $moved = Rename-FailedArchive -Path $ArchivePath -Suffix '.bad'
         throw "Integrity check failed on $ArchivePath; zstd -t exited $verifyExit and reports the archive as corrupt, so keeping all existing backups. $($moved.Note)"

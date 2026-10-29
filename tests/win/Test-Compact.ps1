@@ -18,9 +18,11 @@ $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 # File-wide: Invoke-MaintCompact reads the distro from config, and the
 # operator's real maint.conf must never decide what a test compacts.
 function Get-MaintConfig { @{ Distro = 'Ubuntu'; BackupRoot = $null; Keep = 3 } }
-# Common.ps1 is loaded for Get-DistroVhdxPath only. Its real Invoke-Wsl and
-# Write-MaintLog must never run from here (a shutdown, a write to the repo's
-# logs\): a test that forgets to shadow them fails loudly instead.
+# Common.ps1 is loaded for Get-DistroVhdxPath and Invoke-WslNoThrow (which
+# Wait-WslStopped polls through; it reaches the per-test wsl.exe function).
+# Its real Invoke-Wsl and Write-MaintLog must never run from here (a shutdown,
+# a write to the repo's logs\): a test that forgets to shadow them fails
+# loudly instead.
 function Invoke-Wsl { param($Arguments) throw 'TEST GUARD: the real Invoke-Wsl must never be reached' }
 function Write-MaintLog { param($Level = 'info', $Message) throw 'TEST GUARD: the real Write-MaintLog must never be reached' }
 # No registered distros: the real HKCU Lxss key is never read, and the disk
