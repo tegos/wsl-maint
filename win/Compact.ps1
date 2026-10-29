@@ -47,7 +47,9 @@ function Wait-WslStopped {
     $running = @('(not yet polled)')
     $pollExit = $null
     while ((Get-Date) -lt $deadline) {
-        $raw = & wsl.exe -l --running -q 2>$null
+        # Invoke-WslNoThrow, not a bare call: under 'Stop', PS 5.1 turns a
+        # redirected stderr line into a terminating error even with 2>$null.
+        $raw = Invoke-WslNoThrow @('-l', '--running', '-q') 2>$null
         $pollExit = $LASTEXITCODE
         $running = @($raw | ForEach-Object { $_ -replace "`0", '' } | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' })
         # A non-zero exit means this reading is inconclusive, not "nothing

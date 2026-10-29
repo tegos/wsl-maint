@@ -1,4 +1,5 @@
-# win\Backup.ps1 -- Confirm-LargeDeletion against a REAL native process.
+# win\Backup.ps1 -- Confirm-LargeDeletion (and the wsl.exe wrappers it relies
+# on, plus Compact's poll) against a REAL native process.
 #
 # REAL-PROCESS COVERAGE, narrow on purpose. Every other Backup test shadows
 # wsl.exe with a PowerShell function, which can never reproduce the
@@ -24,6 +25,7 @@ $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 . (Join-Path $here 'FakeExe.ps1')
 . (Join-Path (Split-Path -Parent (Split-Path -Parent $here)) 'win\Common.ps1')
 . (Join-Path (Split-Path -Parent (Split-Path -Parent $here)) 'win\Backup.ps1')
+. (Join-Path (Split-Path -Parent (Split-Path -Parent $here)) 'win\Compact.ps1')
 
 try {
     $script:FakeDir = New-FakeNativeExe
@@ -118,11 +120,45 @@ function Test-PreviewCarriesTheConfigOverride {
     function Get-MaintConfig { @{ Distro = 'TestDistro'; BackupRoot = 'T:\nowhere'; Keep = 3; ConfigOverride = 'T:\conf\alt.conf' } }
     $r = Invoke-NativeConsentScenario -Lines @('out:would free: 10M')
     Assert-Null $r.Error 'the preview ran'
-    Assert-Match (Get-FakeExeCalls $script:FakeDir) '^-d TestDistro -- /mnt/\S+/wsl/maint clean --config /mnt/t/conf/alt\.conf --dry-run$' 'the override reaches the preview call'
+    Assert-Match (Get-FakeExeCalls $script:FakeDir) '^-d TestDistro --exec /mnt/\S+/wsl/maint clean --config /mnt/t/conf/alt\.conf --dry-run$' 'the override reaches the preview call'
+}
+
+# Invoke-WslNoThrow, used by the zstd, probe and fstrim calls in Backup.ps1:
+# stderr under 'Stop' with a redirect must not throw, the exit code must
+# survive in $LASTEXITCODE, and stdout must flow through (audit #4, item 14).
+function Test-WslNoThrowSurvivesStderrUnderStop {
+    $r = Invoke-WithFakeExe -Dir $script:FakeDir -Lines @('out:kept', 'err:[info] on stderr', 'exit:3') -Script {
+        $ErrorActionPreference = 'Stop'
+        $out = $null
+        $err = $null
+        $code = $null
+        try { $out = Invoke-WslNoThrow @('-d', 'X', '--exec', 'zstd', '-t', '/mnt/t/a.tar.zst') 2>&1; $code = $LASTEXITCODE } catch { $err = "$_" }
+        [pscustomobject]@{ Out = $out; Error = $err; Code = $code }
+    }
+    Assert-Null $r.Error 'stderr from wsl.exe does not throw under Stop'
+    Assert-Eq 3 $r.Code 'the exit code survives in LASTEXITCODE'
+    Assert-Contains ($r.Out -join "`n") 'kept' 'stdout flows through'
+    Assert-Contains (Get-FakeExeCalls $script:FakeDir) '-d X --exec zstd -t /mnt/t/a.tar.zst' 'the fake recorded the call'
+}
+
+# Wait-WslStopped polls `wsl -l --running -q 2>$null` through Invoke-WslNoThrow:
+# a stderr line under 'Stop' must not throw, and exit 0 with empty stdout
+# still reads as stopped (audit #4, item 14).
+function Test-WaitWslStoppedSurvivesStderrUnderStop {
+    $r = Invoke-WithFakeExe -Dir $script:FakeDir -Lines @('err:poll noise', 'exit:0') -Script {
+        $ErrorActionPreference = 'Stop'
+        $err = $null
+        try { Wait-WslStopped -TimeoutSeconds 5 -PollSeconds 0 } catch { $err = "$_" }
+        [pscustomobject]@{ Error = $err }
+    }
+    Assert-Null $r.Error 'stderr from the poll does not throw under Stop, and the VM reads as stopped'
+    Assert-Contains (Get-FakeExeCalls $script:FakeDir) '-l --running -q' 'the fake recorded the poll'
 }
 
 try {
     Test-FakeExeTriggersNativeCommandErrorUnderStop
+    Test-WslNoThrowSurvivesStderrUnderStop
+    Test-WaitWslStoppedSurvivesStderrUnderStop
     Test-ShadowedWslRefusesToRun
     Test-StderrDuringPreviewDoesNotThrow
     Test-FailingPreviewWithStderrReachesFailSafe

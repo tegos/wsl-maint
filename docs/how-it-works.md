@@ -20,7 +20,7 @@ So the tool has two halves:
   Docker, audit, backup verification. No admin needed.
 - `maint.bat` -> `maint.ps1` does what needs a stopped VM or admin rights: export,
   compact, Defender exclusions, Windows TEMP. It calls into WSL with
-  `wsl.exe -d <distro> -- <absolute path>/wsl/maint ...`, where the path is derived from
+  `wsl.exe -d <distro> --exec <absolute path>/wsl/maint ...`, where the path is derived from
   the repo location (`D:\tools\wsl-maint` -> `/mnt/d/tools/wsl-maint/wsl/maint`).
 
 The repo lives on a Windows drive, not inside WSL. After `wsl --shutdown`,
@@ -44,7 +44,7 @@ maint.bat (UAC self-elevation, pause at the end)
        -> win/Backup.ps1   clean -> fstrim -> export -> zstd -> verify -> retention
        -> win/Compact.ps1  shutdown -> wait until WSL is really stopped -> Optimize-VHD
        -> win/WinClean.ps1, win/Defender.ps1
-       -> wsl.exe -- /mnt/<drive>/.../wsl/maint clean|audit|docker
+       -> wsl.exe --exec /mnt/<drive>/.../wsl/maint clean|audit|docker
                               |
 wsl/maint (bash CLI) ---------+
   lib/config.sh   reads maint.conf (as data, never sourced)
@@ -378,7 +378,8 @@ Each of these was a real bug once.
    Test the exit code with broken input, not by reading the output.
 3. **PowerShell 5.1 + `$ErrorActionPreference = 'Stop'` + native stderr** gives a
    terminating error even when the program exits 0. Around `wsl.exe` calls that write to
-   stderr, switch to `Continue` and check `$LASTEXITCODE`.
+   stderr, switch to `Continue` and check `$LASTEXITCODE` (`Invoke-Wsl` throws on a
+   non-zero exit, `Invoke-WslNoThrow` leaves it to the caller).
 4. **Probe the operation, not a proxy.** The journal vacuum used to probe `sudo -n true`.
    A correct sudoers grant allows only `journalctl --vacuum-size=100M`, not `true`, so the
    probe said "no sudo" exactly where sudo was set up right. Now the real command runs and
@@ -393,6 +394,9 @@ Each of these was a real bug once.
 8. **`npx playwright install` deletes other projects' browser revisions by default.**
    Use `PLAYWRIGHT_SKIP_BROWSER_GC=1`. General rule: delete a cache only once you have
    proven nobody needs it.
+9. **`wsl.exe -d X -- a b c` runs `$SHELL -c "a b c"`.** The tail is one shell string, so
+   a path from `maint.conf` would be word-split and `$(...)` in it would run. Calls that
+   carry a path use `--exec`, which passes each argument as its own argv entry.
 
 ## Tests
 
@@ -403,7 +407,8 @@ replace `wsl.exe`, `Optimize-VHD`, `Read-Host` and similar with functions, which
 the logic (branches, order, what was deleted and what survived) but not native stream
 behaviour (stdout/stderr order, UTF-16LE). That is still checked by hand with `-DryRun`
 against the real binaries. The exception is pitfall 3, covered by
-`Test-BackupConsentNative.ps1`: it compiles a real console program
+`Test-BackupConsentNative.ps1` for the preview, `Invoke-WslNoThrow` and compact's
+`wsl -l --running -q` poll: it compiles a real console program
 (`tests/win/FakeExe.ps1`) and puts it first on `PATH` as `wsl.exe`.
 
 ## Building your own
